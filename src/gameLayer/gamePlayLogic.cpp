@@ -240,6 +240,9 @@ bool initGameplay(ProgramData &programData, const char *c) //GAME STUFF!
 
 	//we started the game!
 	AudioEngine::stopAllMusicAndSounds();
+
+	AudioEngine::playRandomNightMusic();
+
 	return true;
 }
 
@@ -521,6 +524,16 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		//std::cout << gameData.serverTimer << "\n";
 	}
 #pragma endregion
+
+#pragma region music
+
+	if (!AudioEngine::isMusicPlaying())
+	{
+		AudioEngine::playRandomNightMusic();
+	}
+
+#pragma endregion
+
 
 #pragma region reload skin
 
@@ -2865,11 +2878,33 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 	if (gameData.escapePressed)
 	{
 
-		programData.ui.renderer2d.renderRectangle({0,0,programData.ui.renderer2d.windowW,
-			programData.ui.renderer2d.windowH}, {0,0,0,0.5});
-	
+
 		programData.ui.menuRenderer.Begin(2);
 		programData.ui.menuRenderer.SetAlignModeFixedSizeWidgets({0,150});
+
+
+		//if we are not in the tonemapping section...
+		bool dontDarkenScreen = 0;
+		for (auto &s : programData.ui.menuRenderer.internal.allMenuStacks
+			[programData.ui.menuRenderer.internal.currentId])
+		{
+			if (s == "Color post processing")
+			{
+				programData.ui.renderer2d.renderText({150,50},
+					("fps: " + std::to_string(programData.currentFps)).c_str(), programData.ui.font, Colors_Gray, 0.75f);
+				dontDarkenScreen = true;
+				break;
+			}
+		}
+
+		if (!dontDarkenScreen)
+		{
+			programData.ui.renderer2d.renderRectangle({0,0,programData.ui.renderer2d.windowW,
+				programData.ui.renderer2d.windowH}, {0,0,0,0.5});
+		};
+
+
+
 
 		programData.ui.menuRenderer.Text("Game Menu", Colors_White);
 
@@ -2954,4 +2989,6 @@ void closeGameLogic()
 	//free all resources
 	gameData.clearData();
 	threadPoolForChunkBaking.cleanup();
+	AudioEngine::stopAllMusicAndSounds();
+
 }

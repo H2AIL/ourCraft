@@ -181,6 +181,13 @@ void removeBodyRotationFromHead(glm::vec2 &bodyOrientation, glm::vec3 &lookDirec
 	lookDirection = glm::rotateY(lookDirection, -rotation);
 }
 
+glm::vec3 computeLookDirection(glm::vec2 bodyOrientation, glm::vec3 lookDirection)
+{
+	float rotation = -std::atan2(bodyOrientation.y, bodyOrientation.x) - glm::radians(90.f);
+	lookDirection = glm::rotateY(lookDirection, rotation);
+	return lookDirection;
+}
+
 bool getRandomChance(std::minstd_rand &rng, float chance)
 {
 	float dice = getRandomNumberFloat(rng, 0.0, 1.0);
@@ -293,6 +300,12 @@ void setBodyAndLookOrientation(glm::vec2 &bodyOrientation, glm::vec3 &lookDirect
 void PhysicalEntity::jump(float impulse)
 {
 	forces.jump(impulse);
+}
+
+void PhysicalEntity::move(glm::vec2 move)
+{
+	position.x += move.x;
+	position.z += move.y;
 }
 
 void adjustVectorTowardsDirection(glm::vec3 &vector, glm::vec3 desiredDirection, float threshold)

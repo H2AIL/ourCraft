@@ -66,6 +66,8 @@ struct Renderer
 	};
 
 	BlockGeometryIndex blockGeometry[ModelsManager::BLOCK_MODELS_COUNT];
+	BlockGeometryIndex blockGeometryForEntities[ModelsManager::BLOCK_MODELS_COUNT];
+
 
 	void recreateBlockGeometryData(ModelsManager &modelsManager);
 
@@ -289,6 +291,15 @@ struct Renderer
 		uniform u_tonemapper = 0;
 		uniform u_exposure = 0;
 
+		uniform u_saturation = 0;
+		uniform u_vibrance = 0;
+		uniform u_gamma = 0;
+		uniform u_shadowBoost = 0;
+		uniform u_highlightBoost = 0;
+		uniform u_vignette = 0;
+		uniform u_lift = 0;
+		uniform u_gain = 0;
+
 	}applyToneMapper;
 
 	//It is the same as the z pre pass shader
@@ -400,6 +411,7 @@ struct Renderer
 		Shader shader;
 		GLuint u_texture = GL_INVALID_INDEX;
 		GLuint u_viewProjection = GL_INVALID_INDEX;
+		GLuint u_useOneTexture = GL_INVALID_INDEX;
 	}renderUIBlocksShader;
 
 
@@ -437,7 +449,7 @@ struct Renderer
 
 	void recreateBlocksTexturesBuffer(BlocksLoader &blocksLoader);
 
-	void renderAllBlocksUiTextures(BlocksLoader &blocksLoader);
+	void renderAllBlocksUiTextures(BlocksLoader &blocksLoader, ModelsManager &modelsManager);
 
 	void create(ModelsManager &modelsManager);
 	void reloadShaders();

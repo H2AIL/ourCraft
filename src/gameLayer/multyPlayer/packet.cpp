@@ -116,13 +116,17 @@ void sendPacketAndCompress(ENetPeer *to,
 		}
 		else
 		{
+			
+			//std::cout << "CHUNK SIZE BYTES: " << compressedSize << "\n";
+			//std::cout << "CompressedSize: " << compressedSize << "\n";
+
 			//std::cout << "compressed\n";
 			p.setCompressed();
 			sendPacket(to, p, compressedData, compressedSize, reliable, channel,
 				freeCallback, packetId);
-			delete[] compressedData;
 		}
 
+		delete[] compressedData;
 	
 	}
 }

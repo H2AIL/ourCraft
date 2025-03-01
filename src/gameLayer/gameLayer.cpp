@@ -207,13 +207,13 @@ void loadAllDefaultTexturePacks()
 
 	programData.modelsManager.loadAllModels(RESOURCES_PATH "assets/models/", false);
 
-	programData.blocksLoader.loadAllTextures(RESOURCES_PATH "assets/");
+	programData.blocksLoader.loadAllTextures(RESOURCES_PATH "assets/", true);
 	programData.blocksLoader.loadAllItemsGeometry();
 	programData.blocksLoader.setupAllColors();
 
 	programData.renderer.recreateBlocksTexturesBuffer(programData.blocksLoader);
 
-	programData.renderer.renderAllBlocksUiTextures(programData.blocksLoader);
+	programData.renderer.renderAllBlocksUiTextures(programData.blocksLoader, programData.modelsManager);
 
 	
 
@@ -282,7 +282,7 @@ bool loadTexturePack(const char *basePath)
 
 		if (std::filesystem::is_directory(blocksPath) || std::filesystem::is_directory(items))
 		{
-			programData.blocksLoader.loadAllTextures(root.string() + "/");
+			programData.blocksLoader.loadAllTextures(root.string() + "/", false);
 		}
 
 
@@ -343,7 +343,7 @@ bool initGame() //main server and title screen stuff
 
 	loadAllDefaultTexturePacks();
 	programData.renderer.create(programData.modelsManager);
-	programData.renderer.renderAllBlocksUiTextures(programData.blocksLoader);
+	programData.renderer.renderAllBlocksUiTextures(programData.blocksLoader, programData.modelsManager);
 
 
 	AudioEngine::loadAllMusic();

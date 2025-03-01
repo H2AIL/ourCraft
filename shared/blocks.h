@@ -74,7 +74,7 @@ enum BlockTypes : unsigned short
 	vitral2,
 	glassNotClear2,
 	glass2,
-	purple_stained_glass,
+	mossyCobblestone,
 	magenta_stained_glass,
 	pink_stained_glass,
 	clothBlock,
@@ -228,8 +228,18 @@ enum BlockTypes : unsigned short
 	crate,
 	smallCrate,
 
+	lamp,
+	torchWood,
+
+	mossyCobblestone_stairs,
+	mossyCobblestone_slab,
+	mossyCobblestone_wall,
+
+	cobweb,
 	BlocksCount
 };
+
+int getBlockReorder(int index);
 
 using BlockType = uint16_t;
 
@@ -654,6 +664,7 @@ struct Block
 		return ::isBlockMesh(getType());
 	}
 
+	//todo, investigate where it this used and implement it corectly, and remove the grass mesh component if so
 	bool isCrossMesh()
 	{
 		return ::isCrossMesh(getType());
