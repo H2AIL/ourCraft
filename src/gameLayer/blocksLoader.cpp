@@ -116,7 +116,7 @@ const char *texturesNames[] = {
 	"models/goblet",		//102
 	"models/wineBottle",	//103
 	
-	"models/skull", //104
+	"models/skull2", //104
 	"models/skullTorch", //105
 	"models/books", //106
 	"models/candleHolder", //107
@@ -148,6 +148,12 @@ const char *texturesNames[] = {
 	"models/torch",			//132
 	"models/lamp",			//133
 	"models/woodenTorch",	//134
+
+	"hay",					//135
+	"hayTop",				//136
+	"models/trainingDummyBase", //137
+	"models/target",		//138
+
 
 };
 
@@ -617,6 +623,11 @@ uint16_t blocksLookupTable[] = {
 	75, 75, 75, 75, 75, 75, //mossy cobblestone wall
 	
 	76, 76, 76, 76, 76, 76, //cobweb
+	135, 135, 136, 136, 135, 135, //hay
+	137, 137, 137, 137, 137, 137, //training dummy base
+
+	138, 138, 138, 138, 138, 138, //target
+
 };
 
 void fixAlphaForNormals(unsigned char *buffer, int w, int h)

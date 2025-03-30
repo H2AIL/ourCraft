@@ -8,10 +8,12 @@
 #include <iostream>
 #include <profilerLib/include/profilerLib.h>
 #include <gl2d/gl2d.h>
+#include <array>
+#include <functional>
 
 const int waterLevel = 65;
 
-static alignas(32) float iceNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+alignas(32) static float iceNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 float getIceNoise(int x, int z)
 {
 	return iceNoise[x * CHUNK_SIZE + z];
@@ -111,8 +113,11 @@ void calculateBlockPass1(int height, Block *startPos, Biome &biome, bool road, f
 		roadShape.block.push_back(BlockTypes::grassBlock);
 		roadShape.block.push_back(BlockTypes::gravel);
 		roadShape.block.push_back(BlockTypes::coarseDirt);
+		roadShape.block.push_back(BlockTypes::grassBlock);
+		roadShape.block.push_back(BlockTypes::gravel);
+		roadShape.block.push_back(BlockTypes::pathBlock);
 
-		BlockType roadCenter = BlockTypes::coarseDirt;
+		BlockType roadCenter = BlockTypes::pathBlock;
 		
 		if (roadValue < 0.25)
 		{
@@ -299,6 +304,69 @@ int fromFloatNoiseValToIntegers(float noise, int maxExclusive)
 	return noise * maxExclusive;
 }
 
+
+uint32_t hash(uint32_t x, uint32_t y)
+{
+	x ^= y * 0x51d7348d;
+	x ^= x >> 15;
+	x *= 0x85ebca6b;
+	x ^= x >> 13;
+	x *= 0xc2b2ae35;
+	x ^= x >> 16;
+	return x;
+}
+
+constexpr uint32_t wangHash(uint32_t x)
+{
+	x = (x ^ 61) ^ (x >> 16);
+	x *= 9;
+	x ^= x >> 4;
+	x *= 0x27d4eb2d;
+	x ^= x >> 15;
+	return x;
+}
+
+constexpr uint32_t hash(int32_t x, int32_t y, int32_t z)
+{
+	uint32_t ux = static_cast<uint32_t>(x) * 73856093u;
+	uint32_t uy = static_cast<uint32_t>(y) * 19349663u;
+	uint32_t uz = static_cast<uint32_t>(z) * 83492791u;
+
+	return wangHash(ux ^ uy ^ uz);
+}
+
+float hashNormalized(uint32_t h)
+{
+	return (h & 0xFFFFFF) / float(0x1000000);;
+}
+
+// Returns true for some (x, y), ensuring no adjacent (x, y) is also true
+// Ensures no "true" values within `radius`, checking only in positive directions
+bool generateFeature(int x, int y, int seedHash, float threshold = 0.1f, int radius = 2)
+{
+	uint32_t h = hash(x, y, 0);
+	float value = hashNormalized(h);// Normalize to [0,1]
+
+	if (value >= threshold) return false; // Not selected
+
+	// Check only in positive directions to avoid redundant checks
+	for (int dx = 0; dx <= radius; ++dx)
+	{
+		for (int dy = 0; dy <= radius; ++dy)
+		{
+			if (dx == 0 && dy == 0) continue; // Skip self
+			if (dx * dx + dy * dy > radius * radius) continue; // Ensure inside circle
+
+			uint32_t neighborHash = hash(x + dx, y + dy, seedHash);
+			float neighborValue = (neighborHash & 0xFFFFFF) / float(0x1000000);
+
+			if (neighborValue < threshold) return false; // Conflict, discard
+		}
+	}
+
+	return true; // Passed checks
+}
+
 void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structuresManager, BiomesManager &biomesManager,
 	std::vector<StructureToGenerate> &generateStructures)
 {
@@ -334,7 +402,6 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 			}
 		return;
 	}
-
 
 
 	float interpolateValues[16 * 16] = {};
@@ -391,7 +458,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		//}
 		
 	};
-	               
+				   
 	//water    plains   hills
 	//int startValues[] = {22, 45,  66,      72,     80, 140};
 	//int maxlevels[] =   {40, 64,  71,      120,     170, 250};
@@ -417,7 +484,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	c.vegetation = vegetationMaster;
 
 #pragma region noises
-	static alignas(32) float continentalness[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float continentalness[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.continentalnessNoise->FillNoiseSet(continentalness, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -427,7 +494,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		continentalness[i] = wg.continentalSplines.applySpline(continentalness[i]);
 	}
 
-	static alignas(32) float continentalness2[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float continentalness2[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.continentalness2Noise->FillNoiseSet(continentalness2, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -437,7 +504,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		continentalness2[i] = wg.continental2Splines.applySpline(continentalness2[i]);
 	}
 
-	static alignas(32) float continentalnessPick[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float continentalnessPick[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.continentalness2Noise->FillNoiseSet(continentalnessPick, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -447,7 +514,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		continentalnessPick[i] = wg.continentalnessPickSplines.applySpline(continentalnessPick[i]);
 	}
 
-	static alignas(32) float continentalnessFinal[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float continentalnessFinal[CHUNK_SIZE * CHUNK_SIZE] = {};
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
 
@@ -464,7 +531,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		//}
 	}
 
-	static alignas(32) float peaksAndValies[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float peaksAndValies[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.peaksValiesNoise->FillNoiseSet(peaksAndValies, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -475,7 +542,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float wierdness[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float wierdness[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.wierdnessNoise->FillNoiseSet(wierdness, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -486,7 +553,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float densityNoise[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float densityNoise[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.stone3Dnoise->FillNoiseSet(densityNoise, xPadd, 0, zPadd, CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
 	{
@@ -497,7 +564,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float randomSand[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float randomSand[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.randomStonesNoise->FillNoiseSet(randomSand, xPadd, 0, zPadd, CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
 	{
@@ -508,7 +575,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float randomGravel[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float randomGravel[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.randomStonesNoise->FillNoiseSet(randomGravel, xPadd, 300, zPadd, CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
 	{
@@ -519,7 +586,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 	
 
-	static alignas(32) float randomClay[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float randomClay[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.randomStonesNoise->FillNoiseSet(randomClay, xPadd, 600, zPadd, CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
 	{	
@@ -530,7 +597,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float spagettiNoise[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float spagettiNoise[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.spagettiNoise->FillNoiseSet(spagettiNoise, xPadd, 0, zPadd, CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
 	{
@@ -542,7 +609,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 
 
 	const float SHIFT = 16;
-	static alignas(32) float spagettiNoise2[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float spagettiNoise2[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.spagettiNoise->FillNoiseSet(spagettiNoise2, xPadd + SHIFT + 6, 0 + SHIFT + 3, zPadd + SHIFT,
 		CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
@@ -553,12 +620,12 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		spagettiNoise2[i] = wg.spagettiNoiseSplines.applySpline(spagettiNoise2[i]);
 	}
 
-	static alignas(32) float randomStones[1] = {};
+	alignas(32) static float randomStones[1] = {};
 	wg.randomStonesNoise->FillNoiseSet(randomStones, xPadd, 0, zPadd, 1, 1, 1);
 	*randomStones = std::pow(((*randomStones + 1.f) / 2.f)*0.5, 3.0);
 
 	
-	static alignas(32) float cavesNoise[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
+	alignas(32) static float cavesNoise[CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE] = {};
 	wg.cavesNoise->FillNoiseSet(cavesNoise, xPadd, 0, zPadd, CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT; i++)
 	{
@@ -568,7 +635,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		cavesNoise[i] = wg.cavesSpline.applySpline(cavesNoise[i]);
 	}
 
-	static alignas(32) float lakesNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float lakesNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.lakesNoise->FillNoiseSet(lakesNoise, xPadd, 0, zPadd, CHUNK_SIZE, 1, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -578,7 +645,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		lakesNoise[i] = wg.lakesSplines.applySpline(lakesNoise[i]);
 	}
 
-	static alignas(32) float alternativeBlocksNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float alternativeBlocksNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.alternativePatchesOfBlocks->FillNoiseSet(alternativeBlocksNoise, xPadd, 0, zPadd, CHUNK_SIZE, 1, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -586,7 +653,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		alternativeBlocksNoise[i] /= 2;
 	}
 
-	static alignas(32) float whiteNoise[(CHUNK_SIZE + 1) * (CHUNK_SIZE + 1)] = {};
+	alignas(32) static float whiteNoise[(CHUNK_SIZE + 1) * (CHUNK_SIZE + 1)] = {};
 	wg.whiteNoise->FillNoiseSet(whiteNoise, xPadd, 0, zPadd, CHUNK_SIZE + 1, (1), CHUNK_SIZE + 1);
 	for (int i = 0; i < (CHUNK_SIZE + 1) * (CHUNK_SIZE + 1); i++)
 	{
@@ -594,7 +661,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		whiteNoise[i] /= 2;
 	}
 
-	static alignas(32) float whiteNoise2[(CHUNK_SIZE + 1) * (CHUNK_SIZE + 1)] = {};
+	alignas(32) static float whiteNoise2[(CHUNK_SIZE + 1) * (CHUNK_SIZE + 1)] = {};
 	wg.whiteNoise2->FillNoiseSet(whiteNoise2, xPadd, 0, zPadd, CHUNK_SIZE + 1, (1), CHUNK_SIZE + 1);
 	for (int i = 0; i < (CHUNK_SIZE + 1) * (CHUNK_SIZE + 1); i++)
 	{
@@ -602,7 +669,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		whiteNoise2[i] /= 2;
 	}
 
-	static alignas(32) float whiteNoise3[(CHUNK_SIZE + 1) * (CHUNK_SIZE + 1)] = {};
+	alignas(32) static float whiteNoise3[(CHUNK_SIZE + 1) * (CHUNK_SIZE + 1)] = {};
 	wg.whiteNoise2->FillNoiseSet(whiteNoise3, xPadd, 100, zPadd, CHUNK_SIZE + 1, (1), CHUNK_SIZE + 1);
 	for (int i = 0; i < (CHUNK_SIZE + 1) * (CHUNK_SIZE + 1); i++)
 	{
@@ -611,7 +678,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float stonePatches[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float stonePatches[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.stonePatchesNoise->FillNoiseSet(stonePatches, xPadd, 0, zPadd, CHUNK_SIZE, 1, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -622,7 +689,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float riversNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float riversNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.riversNoise->FillNoiseSet(riversNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -633,7 +700,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float hillsDropDownsNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float hillsDropDownsNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.hillsDropsNoise->FillNoiseSet(hillsDropDownsNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -644,7 +711,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float roadNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float roadNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.roadNoise->FillNoiseSet(roadNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -655,7 +722,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float treeAmountNoise1[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float treeAmountNoise1[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.treesAmountNoise->FillNoiseSet(treeAmountNoise1, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -665,7 +732,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		treeAmountNoise1[i] = wg.treesAmountSpline.applySpline(treeAmountNoise1[i]);
 	}
 
-	static alignas(32) float treeAmountNoise2[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float treeAmountNoise2[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.treesAmountNoise->FillNoiseSet(treeAmountNoise2, xPadd + 10000, 1000, zPadd + 10000, CHUNK_SIZE, (1), CHUNK_SIZE, 2);
 
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
@@ -676,7 +743,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		treeAmountNoise2[i] = wg.treesAmountSpline.applySpline(treeAmountNoise2[i]);
 	}
 
-	static alignas(32) float treeTypeNoise1[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float treeTypeNoise1[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.treesTypeNoise->FillNoiseSet(treeTypeNoise1, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -687,7 +754,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	}
 
 
-	static alignas(32) float treeTypeNoise2[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float treeTypeNoise2[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.treesTypeNoise->FillNoiseSet(treeTypeNoise2, xPadd + 10000, 1000, zPadd + 10000, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -697,7 +764,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		treeTypeNoise2[i] = wg.treesTypeSpline.applySpline(treeTypeNoise2[i]);
 	}
 
-	static alignas(32) float randomHills[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float randomHills[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.randomHillsNoise->FillNoiseSet(randomHills, xPadd, 0, zPadd, CHUNK_SIZE, 1, CHUNK_SIZE);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -707,7 +774,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		randomHills[i] = wg.randomHillsSplines.applySpline(randomHills[i]);
 	}
 
-	static alignas(32) float swampNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float swampNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.swampNoise->FillNoiseSet(swampNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -717,7 +784,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		swampNoise[i] = wg.swampSplines.applySpline(swampNoise[i]);
 	}
 
-	static alignas(32) float swampMaskNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float swampMaskNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.swampMask->FillNoiseSet(swampMaskNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -727,7 +794,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		swampMaskNoise[i] = wg.swampMaskSplines.applySpline(swampMaskNoise[i]);
 	}
 
-	static alignas(32) float stoneSpikesNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float stoneSpikesNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.stoneSpikesNoise->FillNoiseSet(stoneSpikesNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -737,7 +804,7 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 		stoneSpikesNoise[i] = wg.stoneSpikesSplines.applySpline(stoneSpikesNoise[i]);
 	}
 
-	static alignas(32) float stoneSpikesMaskNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
+	alignas(32) static float stoneSpikesMaskNoise[CHUNK_SIZE * CHUNK_SIZE] = {};
 	wg.stoneSpikesMask->FillNoiseSet(stoneSpikesMaskNoise, xPadd, 0, zPadd, CHUNK_SIZE, (1), CHUNK_SIZE, 1);
 	for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++)
 	{
@@ -929,6 +996,30 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 	};
 
 #pragma endregion
+
+
+#pragma region could generate medium structures
+
+	auto spawnProbability = [](float structuresOnceEveryChunks)
+	{
+		return 1.0 / (structuresOnceEveryChunks * structuresOnceEveryChunks);
+	};
+
+	unsigned int seedHash = wg.continentalnessNoise->GetSeed();
+	bool couldGenerateMediumStructures = generateFeature(c.x, c.z, seedHash++, spawnProbability(10), 4);
+
+
+#pragma endregion
+
+	glm::ivec2 lowestPointInChunk = {};
+	int lowestLevelInChunk = 300;
+
+	struct DataForStructureGen
+	{
+		float rivers = 0;
+		float lakes = 0;
+
+	}dataForStructureGen;
 
 	for (int x = 0; x < CHUNK_SIZE; x++)
 		for (int z = 0; z < CHUNK_SIZE; z++)
@@ -1712,23 +1803,38 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 					}
 				};
 
-				if (!generatedSomethingElse)
+				if (couldGenerateMediumStructures)
 				{
-					int type = getIntFromFloat(treeType1, biomesManager.greenBiomesTrees.size());
-					generateOneFeature(treeAmountVal1, biomesManager.greenBiomesTrees[type]);
+					
+					//we only generate the grass
+					if (!generatedSomethingElse)
+					{
+						generateOneFeature(0.6, biomesManager.greenBiomesGrass[0]);
+					}
+				}
+				else
+				{
+					//generate small structures
+					if (!generatedSomethingElse)
+					{
+						int type = getIntFromFloat(treeType1, biomesManager.greenBiomesTrees.size());
+						generateOneFeature(treeAmountVal1, biomesManager.greenBiomesTrees[type]);
+					}
+
+					if (!generatedSomethingElse)
+					{
+						int type = getIntFromFloat(treeType2, biomesManager.greenBiomesTrees.size());
+						generateOneFeature(treeAmountVal2, biomesManager.greenBiomesTrees[type]);
+					}
+
+					if (!generatedSomethingElse)
+					{
+						//todo
+						generateOneFeature(0.6, biomesManager.greenBiomesGrass[0]);
+					}
 				}
 
-				if (!generatedSomethingElse)
-				{
-					int type = getIntFromFloat(treeType2, biomesManager.greenBiomesTrees.size());
-					generateOneFeature(treeAmountVal2, biomesManager.greenBiomesTrees[type]);
-				}
-
-				if (!generatedSomethingElse)
-				{
-					//todo
-					generateOneFeature(0.6, biomesManager.greenBiomesGrass[0]);
-				}
+				
 
 				/*
 				if(!generatedSomethingElse)
@@ -1874,11 +1980,120 @@ void generateChunk(ChunkData& c, WorldGenerator &wg, StructuresManager &structur
 
 			}
 
+			if (firstH < lowestLevelInChunk)
+			{
+				lowestLevelInChunk = firstH;
+				lowestPointInChunk = glm::ivec2(x, z);
 
+				dataForStructureGen.lakes = newLakeNoiseVal;
+				dataForStructureGen.rivers = riverChanceValue;
+			}
 
 		}
-	
-	
+
+
+	#pragma region big structures
+
+		#pragma region templates
+		thread_local static StaticVector<std::function<void()>, 40> structuresChoice;
+		structuresChoice.clear();
+
+		auto setPosAndRandomNumbers = [&](StructureToGenerate &str)
+		{
+			str.pos = {lowestPointInChunk.x + xPadd, lowestLevelInChunk, lowestPointInChunk.y + zPadd};
+			str.randomNumber1 = getWhiteNoise3Val(lowestPointInChunk.x, lowestPointInChunk.y);
+			str.randomNumber2 = getWhiteNoise3Val(lowestPointInChunk.x + 1, lowestPointInChunk.y);
+			str.randomNumber3 = getWhiteNoise3Val(lowestPointInChunk.x + 1, lowestPointInChunk.y + 1);
+			str.randomNumber4 = getWhiteNoise3Val(lowestPointInChunk.x, lowestPointInChunk.y + 1);
+		};
+
+		auto smallAbandonedHouse = [&]()
+		{
+			StructureToGenerate str;
+			str.type = Structure_AbandonedHouse;
+			setPosAndRandomNumbers(str);
+			str.setDefaultSmallBuildingSettings();
+
+			generateStructures.push_back(str);
+		};
+
+		auto goblinTower = [&]()
+		{
+			StructureToGenerate str;
+			str.type = Structure_GoblinTower;
+			setPosAndRandomNumbers(str);
+			str.setDefaultSmallBuildingSettings();
+
+			generateStructures.push_back(str);
+		};
+
+		auto trainingCamp = [&]()
+		{
+			StructureToGenerate str;
+			str.type = Structure_AbandonedTrainingCamp;
+			setPosAndRandomNumbers(str);
+			str.setDefaultSmallBuildingSettings();
+
+			generateStructures.push_back(str);
+		};
+
+		auto smallStoneRuins = [&]()
+		{
+			StructureToGenerate str;
+			str.type = Structure_StoneRuins;
+			setPosAndRandomNumbers(str);
+			str.setDefaultSmallBuildingSettings();
+
+			generateStructures.push_back(str);
+		};
+
+		auto nothing = [&]()
+		{
+
+		};
+		
+		#pragma endregion
+
+
+		if (couldGenerateMediumStructures)
+		{
+
+		
+			float generateStructureChance = hashNormalized(hash(c.x, c.z, seedHash++));
+
+			//not inside oceans
+			if (currentBiomeHeight > 1)
+			{
+
+				structuresChoice.push_back(nothing);
+
+				if (dataForStructureGen.lakes > 0.2 || dataForStructureGen.rivers > 0.2)
+				{
+
+					//rivers and lakes structures
+
+				}
+				else
+				{
+					structuresChoice.push_back(goblinTower);
+					structuresChoice.push_back(smallAbandonedHouse);
+					structuresChoice.push_back(trainingCamp);
+					structuresChoice.push_back(smallStoneRuins);
+				}
+
+				uint32_t randomValue = hash(c.x, c.z, seedHash++);
+				int index = randomValue % structuresChoice.size();
+				structuresChoice[index](); // Call the selected function
+
+
+			}
+
+			
+		}
+
+	#pragma endregion
+
+
 	//profiler.end();
 	//std::cout << "Time ms: " << profiler.rezult.timeSeconds * 1000 << "\n";
 

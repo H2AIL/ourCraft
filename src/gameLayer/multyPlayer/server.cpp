@@ -6,7 +6,6 @@
 #include <mutex>
 #include <queue>
 #include "worldGenerator.h"
-#include <thread>
 #include <unordered_map>
 #include <iostream>
 #include <atomic>
@@ -14,7 +13,6 @@
 #include "multyPlayer/packet.h"
 #include "multyPlayer/enetServerFunction.h"
 #include <platformTools.h>
-#include <iostream>
 #include <fstream>
 #include <sstream>
 #include <structure.h>
@@ -581,6 +579,31 @@ void serverWorkerUpdate(
 				c.begin()->second.playerData.applyDamageOrLife(10);
 			}
 
+			if (settings.perClientSettings.begin()->second.generateStructure)
+			{
+				settings.perClientSettings.begin()->second.generateStructure = false;
+				auto &c = getAllClientsReff();
+
+				glm::ivec3 pos = c.begin()->second.playerData.getPosition();
+				pos.y -= 21;
+					
+				StructureToGenerate s;
+				s.type = Structure_MinesDungeon;
+				s.randomNumber1 = getRandomNumberFloat(rng, 0, 1);
+				s.randomNumber2 = getRandomNumberFloat(rng, 0, 1);
+				s.randomNumber3 = getRandomNumberFloat(rng, 0, 1);
+				s.randomNumber4 = getRandomNumberFloat(rng, 0, 1);
+				s.pos = pos;
+				s.replaceBlocks = true;
+
+				std::unordered_map<glm::ivec2, SavedChunk *, Ivec2Hash> newCreatedOrLoadedChunks;
+				std::vector<glm::ivec3> controlBlocks;
+				sd.chunkCache.generateStructure(s, structuresManager, newCreatedOrLoadedChunks,
+					sendNewBlocksToPlayers, &controlBlocks);
+
+			}
+
+
 			//TODO chunks shouldn't be nullptrs so why check them?
 			//	// so maybe just perma assert comment at the beginning
 
@@ -880,9 +903,10 @@ void updateLoadedChunks(
 				bool generated = 0;
 				bool loaded = 0;
 
+				//generate new chunks! (or load them)
 				c = sd.chunkCache.getOrCreateChunk(chunkPos.x, chunkPos.y,
-					wg, structureManager, biomesManager, sendNewBlocksToPlayers, true,
-					nullptr, worldSaver, &generated, &loaded
+					wg, structureManager, biomesManager, sendNewBlocksToPlayers, 
+					worldSaver, &generated, &loaded
 				);
 
 				if (generated)

@@ -61,14 +61,15 @@ HitResult BattleUI::update(Item &item, int inventorySlot, bool dontRun,
 
 		auto stats = item.getWeaponStats();
 		stats.speed = debugSpeed;
-		stats.dexterity = debugDexterity;
-		stats.comboFrequency = debugCombo;
+		//stats.dexterity = debugDexterity;
+		//stats.comboFrequency = debugCombo;
 
 		float minHitDamage = stats.getAccuracyNormalized() * 0.2;
 
 		if (item.isSpear())
 		{
-
+			
+			/*
 			if (!started)
 			{
 				if (leftPressed || rightPressed)
@@ -306,28 +307,32 @@ HitResult BattleUI::update(Item &item, int inventorySlot, bool dontRun,
 				}
 
 			}
+			*/
 
+			if (leftPressed || rightPressed)
+			{
+				result.bonusCritChance = 0;
+				result.hit = 1; //
+				result.hitCorectness = 1;
+			}
 
 		}
 		else if (item.isSword())
 		{
 			if (leftPressed || rightPressed)
 			{
-
 				result.bonusCritChance = 0;
 				result.hit = 1; //
 				result.hitCorectness = 1;
-
 			}
 
-
 		}
 
-		if (stats.dexterity < 0)
-		{
-			result.bonusCritChance = std::min(result.bonusCritChance, 0.f);
-			result.bonusCritChance = powf(result.bonusCritChance, 3.f);
-		}
+		//if (stats.accuracy < 0)
+		//{
+		//	result.bonusCritChance = std::min(result.bonusCritChance, 0.f);
+		//	result.bonusCritChance = powf(result.bonusCritChance, 3.f);
+		//}
 
 
 	}

@@ -6,8 +6,9 @@
 bool StructuresManager::loadAllStructures()
 {
 
-	auto loadFolder = [](const char *path, std::vector<StructureData*> &structures) 
+	auto loadFolder = [](const char *path, std::vector<StructureDataAndFlags> &structures) 
 	{
+
 		std::error_code err = {};
 		auto it = std::filesystem::directory_iterator(path, err);
 
@@ -39,15 +40,37 @@ bool StructuresManager::loadAllStructures()
 				}
 
 				auto structure = (StructureData *)sData;
+				StructureDataAndFlags result = {};
+				result.data = (StructureData *)sData;
 
-				for (int x = 0; x < structure->size.x; x++)
-					for (int z = 0; z < structure->size.z; z++)
-						for (int y = 0; y < structure->size.y; y++)
-				{
-					structure->unsafeGet(x, y, z).lightLevel = 0;
-				}
+				result.perCollomFlags.resize(structure->sizeNotRotated.x * structure->sizeNotRotated.z);
 
-				structures.push_back((StructureData *)sData);
+				for (int x = 0; x < structure->sizeNotRotated.x; x++)
+					for (int z = 0; z < structure->sizeNotRotated.z; z++)
+					{
+						auto &perCollomFlag = result.getPerCollomFlagsUnsafe(x, z);
+
+						perCollomFlag.hasBlocks = false;
+						perCollomFlag.minMax = glm::ivec2(9999, -9999);
+
+						for (int y = 0; y < structure->sizeNotRotated.y; y++)
+						{
+							structure->unsafeGet(x, y, z).lightLevel = 0;
+
+							auto blockType = structure->unsafeGet(x, y, z).getType();
+
+							if (blockType != 0)
+							{
+								perCollomFlag.hasBlocks = true;
+								if (y < perCollomFlag.minMax.x) { perCollomFlag.minMax.x = y; }
+								if (y > perCollomFlag.minMax.y) { perCollomFlag.minMax.y = y; }
+							}
+						}
+
+					}
+
+				
+				structures.push_back(result);
 			}
 		}
 
@@ -65,7 +88,17 @@ bool StructuresManager::loadAllStructures()
 	loadFolder(RESOURCES_PATH "gameData/structures/spruceSlim", spruceTreesSlim);
 	loadFolder(RESOURCES_PATH "gameData/structures/smallStones", smallStones);
 	loadFolder(RESOURCES_PATH "gameData/structures/tallTree", tallTreesSlim);
+	loadFolder(RESOURCES_PATH "gameData/structures/abandonedHouse", abandonedHouse);
+	loadFolder(RESOURCES_PATH "gameData/structures/goblinTower", goblinTower);
+	loadFolder(RESOURCES_PATH "gameData/structures/trainingCamp", trainingCamp);
+	loadFolder(RESOURCES_PATH "gameData/structures/smallStoneRuins", smallStoneRuins);
 	
+	loadFolder(RESOURCES_PATH "gameData/structures/minesDungeon/entrance", minesDungeonEntrance);
+	loadFolder(RESOURCES_PATH "gameData/structures/minesDungeon/hall", minesDungeonHall);
+	loadFolder(RESOURCES_PATH "gameData/structures/minesDungeon/room", minesDungeonRoom);
+	loadFolder(RESOURCES_PATH "gameData/structures/minesDungeon/end", minesDungeonEnd);
+
+
 	if (trees.empty()) { return 0; }
 	if (jungleTrees.empty()) { return 0; }
 	if (palmTrees.empty()) { return 0; }
@@ -74,75 +107,84 @@ bool StructuresManager::loadAllStructures()
 	if (birchTrees.empty()) { return 0; }
 	if (igloos.empty()) { return 0; }
 	if (spruceTrees.empty()) { return 0; }
+	if (spruceTreesSlim.empty()) { return 0; }
+	if (smallStones.empty()) { return 0; }
+	if (tallTreesSlim.empty()) { return 0; }
+	if (abandonedHouse.empty()) { return 0; }
+	if (goblinTower.empty()) { return 0; }
+	if (trainingCamp.empty()) { return 0; }
+	if (smallStoneRuins.empty()) { return 0; }
 
 	return true;
 }
 
 void StructuresManager::clear()
 {
+	//todo more generic code here!
+
 	for (auto &i : trees)
 	{
-		unsigned char *d = (unsigned char*)i;
+		unsigned char *d = (unsigned char*)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : jungleTrees)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : palmTrees)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : treeHouses)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : smallPyramids)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : birchTrees)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : igloos)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : spruceTrees)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : spruceTreesSlim)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : smallStones)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 
 	for (auto &i : tallTreesSlim)
 	{
-		unsigned char *d = (unsigned char *)i;
+		unsigned char *d = (unsigned char *)i.data;
 		delete[] d;
 	}
 

@@ -332,6 +332,7 @@ int main()
 {
 
 #ifdef _WIN32
+	timeBeginPeriod(1);
 #ifdef _MSC_VER 
 #if INTERNAL_BUILD
 	AllocConsole();
@@ -376,8 +377,8 @@ int main()
 	if (!GLAD_GL_NV_bindless_texture)
 	{
 		std::cout << "Error, Bindless texture extension not supported!\nUsually integrated GPUs don't support this extension, this will be fixed in the future.\n";
+		std::cout << "Press enter to try anyway...\n";
 		system("pause");
-		exit(0);
 	}
 
 	//enableReportGlErrors();
@@ -416,7 +417,8 @@ int main()
 		//ImGuiIO &io = ImGui::GetIO();
 		//io.Fonts->AddFontFromFileTTF("path/to/your/font.ttf", 24.0f);
 
-		ImFont *font = io.Fonts->AddFontDefault(&ImFontConfig());
+		ImFontConfig fontConfig;
+		ImFont *font = io.Fonts->AddFontDefault(&fontConfig);
 		font->Scale = 1.5f; // Scale factor to make the default font larger
 		io.FontDefault = font;
 	#endif

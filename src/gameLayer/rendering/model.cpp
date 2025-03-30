@@ -63,6 +63,15 @@ bool areStringsSameToLower(const char *a, const char *b)
 void ModelsManager::loadAllModels(std::string path, bool reportErrors)
 {
 
+	if (!temporaryPlayerHandTexture.id)
+	{
+		temporaryPlayerHandTexture.loadFromFile(RESOURCES_PATH "skins/mage.png", true);
+		temporaryPlayerHandBindlessTexture = glGetTextureHandleARB(temporaryPlayerHandTexture.id);
+		glMakeTextureHandleResidentARB(temporaryPlayerHandBindlessTexture);
+	}
+
+
+
 	bool appendMode = texturesIds.empty();
 
 
@@ -169,6 +178,7 @@ void ModelsManager::loadAllModels(std::string path, bool reportErrors)
 		loadTexture((path + "pig.png").c_str(), appendMode, index++);
 		loadTexture((path + "cat.png").c_str(), appendMode, index++);
 		loadTexture((path + "goblin.png").c_str(), appendMode, index++);
+		loadTexture((path + "trainingDummy.png").c_str(), appendMode, index++);
 		loadTexture((path+ "helmetTest.png").c_str(), appendMode, index++);
 		
 
@@ -356,6 +366,8 @@ void ModelsManager::loadAllModels(std::string path, bool reportErrors)
 	if (!goblin.vertexCount)
 		loadModel((path + "goblin.glb").c_str(), goblin);
 
+	if (!trainingDummy.vertexCount)
+		loadModel((path + "trainingDummy.glb").c_str(), trainingDummy);
 
 	
 	flags = aiProcess_ImproveCacheLocality 
@@ -649,6 +661,8 @@ void ModelsManager::loadAllModels(std::string path, bool reportErrors)
 		"slab.glb",
 		"stairs.glb",
 		"wall.glb",
+		"trainingDummyBase.glb",
+		"target.glb",
 	};
 
 	static_assert(sizeof(blockModelsNames) / sizeof(blockModelsNames[0]) == BLOCK_MODELS_COUNT);
@@ -726,7 +740,8 @@ int getDefaultBlockShapeForFurniture(unsigned int b)
 		case lamp: return ModelsManager::lampModel;
 		case torch: return ModelsManager::torchModel;
 		case torchWood: return ModelsManager::torchModel;
-
+		case trainingDummy: return ModelsManager::trainingDummyBaseModel;
+		case target: return ModelsManager::targetModel;
 
 
 	}
@@ -744,6 +759,8 @@ void ModelsManager::clearAllModels()
 	rightHand.cleanup();
 
 	goblin.cleanup();
+
+	trainingDummy.cleanup();
 
 	for (int i = 0; i < BLOCK_MODELS_COUNT; i++)
 	{

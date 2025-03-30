@@ -34,7 +34,7 @@
 #include <gameplay/mapEngine.h>
 #include <gameplay/battleUI.h>
 #include <gameplay/food.h>
-
+#include <cameraShaker.h>
 
 struct GameData
 {
@@ -49,6 +49,7 @@ struct GameData
 	SunShadow sunShadow;
 
 	Profiler gameplayFrameProfiler;
+	CameraShaker cameraShaker;
 
 	MapEngine mapEngine;
 	bool isInsideMapView = 0;
@@ -85,6 +86,8 @@ struct GameData
 
 	bool insideInventoryMenu = 0;
 	int currentInventoryTab = 0;
+	bool justDamaged = 0;
+	float hitLensDirt = 0;
 
 	struct
 	{
@@ -130,6 +133,10 @@ struct GameData
 
 ThreadPool threadPoolForChunkBaking;
 
+float &getHitLensDirt()
+{
+	return gameData.hitLensDirt;
+}
 
 void loadCurrentSkin()
 {
@@ -248,12 +255,18 @@ bool initGameplay(ProgramData &programData, const char *c) //GAME STUFF!
 
 //todo: bug: use the same revision for inventory and block placement and also resend block pos or something
 
+void playSoundAndShakeForPlayerTakingDamage()
+{
+	AudioEngine::playHurtSound();
+	gameData.justDamaged = true;
+	gameData.hitLensDirt = 1;
+}
+
 void dealDamageToLocalPlayer(int damage)
 {
 	if (damage < 0) { return; }
 	if (damage == 0) { AudioEngine::playHurtSound(); return; }
 	damage = std::min(damage, MAXSHORT - 10);
-
 
 	auto &p = gameData.entityManager.localPlayer;
 
@@ -276,8 +289,7 @@ void dealDamageToLocalPlayer(int damage)
 			(char *)&packetData, sizeof(Packet_ClientDamageLocally),
 			true, channelChunksAndBlocks);
 
-		AudioEngine::playHurtSound();
-
+		playSoundAndShakeForPlayerTakingDamage();
 	}
 
 }
@@ -352,9 +364,9 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			from3DPointToBlock(gameData.c.position), gameData.chunkSystem.squareSize,
 			gameData.entityManager, gameData.undoQueue,
 			gameData.chunkSystem, gameData.lightSystem,
-			gameData.serverTimer, disconnect, 
+			gameData.serverTimer, disconnect,
 			gameData.currentBlockInteractionRevisionNumber, shouldExitBlockInteraction,
-			gameData.killed, respawned, gameData.chat, gameData.chatStayOnTimer, 
+			gameData.killed, respawned, gameData.chat, gameData.chatStayOnTimer,
 			gameData.interaction, gameData.playersConnectionData);
 
 		if (disconnect) { return 0; }
@@ -417,7 +429,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 				{
 
 					gameData.chunkSystem.placeBlockNoClient(e.blockPos, e.originalBlock, gameData.lightSystem,
-						&e.blockData, gameData.interaction);
+						&e.blockData, gameData.interaction, gameData.entityManager);
 
 					if (e.blockPos == gameData.currentBlockBreaking.pos)
 					{
@@ -439,7 +451,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 						size_t _ = 0;
 						if (block.readFromBuffer(e.blockData.data(), e.blockData.size(), _))
 						{
-							
+
 							auto *c = gameData.chunkSystem.getChunkSafeFromBlockPos(e.blockPos.x, e.blockPos.z);
 
 							if (c)
@@ -548,6 +560,29 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 #pragma region input
 
+
+	if (player.otherPlayerSettings.gameMode != OtherPlayerSettings::SURVIVAL)
+	{
+		gameData.hitLensDirt = 0;
+	}
+	else
+	{
+		gameData.hitLensDirt -= deltaTime * 1.2;
+
+		gameData.hitLensDirt = std::max(gameData.hitLensDirt, 0.f);
+
+		if (player.life.life / (float)player.life.maxLife < 0.25)
+		{
+			gameData.hitLensDirt = std::max(gameData.hitLensDirt, 0.2f);
+		}
+
+		if (player.life.life / (float)player.life.maxLife < 0.15)
+		{
+			gameData.hitLensDirt = std::max(gameData.hitLensDirt, 0.3f);
+		}
+	}
+
+
 	bool stopMainInput = gameData.escapePressed || gameData.killed || gameData.insideInventoryMenu ||
 		gameData.isInsideMapView || gameData.isInsideChat || gameData.interaction.blockInteractionType != 0;
 
@@ -576,21 +611,25 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		gameData.showUI = !gameData.showUI;
 	}
 
-	if(!stopMainInput || gameData.insideInventoryMenu)
-	if (platform::isKeyReleased(platform::Button::E))
-	{
-		if (gameData.insideInventoryMenu)
+	if (!stopMainInput || gameData.insideInventoryMenu)
+		if (platform::isKeyReleased(platform::Button::E))
 		{
-			exitInventoryMenu();
+			if (gameData.insideInventoryMenu)
+			{
+				exitInventoryMenu();
+			}
+			else
+			{
+				gameData.insideInventoryMenu = true;
+				gameData.interaction = {};
+			}
 		}
-		else
-		{
-			gameData.insideInventoryMenu = true;
-			gameData.interaction = {};
-		}
-	}
 
 	//inventory and menu stuff
+
+	gameData.c.fovRadians = glm::radians(70.f);
+
+	glm::vec3 movementForCameraShake = {};
 	if (!stopMainInput)
 	{
 
@@ -598,16 +637,30 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		{
 			gameData.c.fovRadians = glm::radians(30.f);
 		}
-		else
-		{
-			gameData.c.fovRadians = glm::radians(70.f);
-		}
-
-
 
 		//move
 		{
-			float speed = moveSpeed * deltaTime;
+			auto prelucrateControllerMovement = [&](float x, float y)
+			{
+				auto rez = glm::vec2(x, y);
+				float len = glm::length(rez);
+
+				if (len <= 0.1) { return glm::vec2(); }
+
+				rez /= len;
+				len -= 0.1;
+				len /= 0.8;
+				if (len > 1.f) { len = 1; }
+				rez *= len;
+
+				return rez;
+			};
+
+			auto prelucrateControllerMovementPower = [&](float x, float y)
+			{
+				return prelucrateControllerMovement(x * std::abs(x), y * std::abs(y));
+			};
+
 			glm::vec3 moveDir = {};
 			if (platform::isKeyHeld(platform::Button::Up)
 				|| platform::isKeyHeld(platform::Button::W)
@@ -642,13 +695,13 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			if (player.entity.fly)
 			{
 				if (platform::isKeyHeld(platform::Button::LeftShift)
-					|| platform::getControllerButtons().buttons[platform::ControllerButtons::RBumper].held
+					
 					)
 				{
 					moveDir.y -= 1;
 				}
 				if (platform::isKeyHeld(platform::Button::Space)
-					|| platform::getControllerButtons().buttons[platform::ControllerButtons::LBumper].held
+					|| platform::getControllerButtons().buttons[platform::ControllerButtons::Rthumb].held
 					)
 				{
 					moveDir.y += 1;
@@ -657,12 +710,18 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			else
 			{
 				if (platform::isKeyPressedOn(platform::Button::Space)
-					|| platform::getControllerButtons().buttons[platform::ControllerButtons::LBumper].held
+					|| platform::getControllerButtons().buttons[platform::ControllerButtons::Rthumb].held
 					)
 				{
 					gameData.entityManager.localPlayer.entity.jump();
 				}
 			}
+
+			//apply controller move
+			glm::vec2 controllerMove = prelucrateControllerMovement(platform::getControllerButtons().LStick.x, 
+				platform::getControllerButtons().LStick.y);
+			moveDir.x += controllerMove.x;
+			moveDir.z += controllerMove.y;
 
 			{
 				float l = glm::length(glm::vec2(moveDir.x, moveDir.z));
@@ -671,12 +730,14 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 					moveDir.x /= l;
 					moveDir.z /= l;
 				}
+
+				float speed = moveSpeed;
 				moveDir *= speed;
 			}
 
 			static float jumpTimer = 0;
 			if (platform::isKeyPressedOn(platform::Button::Space)
-				|| platform::getControllerButtons().buttons[platform::ControllerButtons::LBumper].pressed)
+				|| platform::getControllerButtons().buttons[platform::ControllerButtons::Rthumb].pressed)
 			{
 				if (player.otherPlayerSettings.gameMode == OtherPlayerSettings::CREATIVE)
 				{
@@ -698,11 +759,11 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 			if (player.entity.fly)
 			{
-				gameData.entityManager.localPlayer.entity.flyFPS(moveDir, gameData.c.viewDirection);
+				gameData.entityManager.localPlayer.entity.flyFPS(moveDir * deltaTime, gameData.c.viewDirection);
 			}
 			else
 			{
-				gameData.entityManager.localPlayer.entity.moveFPS(moveDir, gameData.c.viewDirection);
+				gameData.entityManager.localPlayer.entity.moveFPS(moveDir, gameData.c.viewDirection, deltaTime);
 			}
 
 			//gameData.c.moveFPS(moveDir);
@@ -714,8 +775,15 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			//gameData.entityManager.localPlayer.lookDirection = 
 
 			bool rotate = !gameData.escapePressed;
-			if (platform::isRMouseHeld()) { rotate = true; }
 			gameData.c.rotateFPS(platform::getRelMousePosition(), 0.22f * 0.02f, rotate);
+
+			if (rotate) //controller
+			{
+				gameData.c.rotateFPSController(
+					-prelucrateControllerMovementPower(platform::getControllerButtons().RStick.x, platform::getControllerButtons().RStick.y),
+					11.0f * deltaTime
+				);
+			}
 
 			if (!gameData.escapePressed)
 			{
@@ -728,6 +796,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 				isPlayerMovingSpeed = 1;
 			}
 
+			movementForCameraShake = moveDir;
 		}
 
 
@@ -750,7 +819,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			}
 
 			auto scroll = platform::getScroll();
-			if (scroll < -0.5)
+			if (scroll < -0.5 || platform::getControllerButtons().buttons[platform::ControllerButtons::RBumper].pressed)
 			{
 				if (gameData.currentItemSelected < 8)
 				{
@@ -759,7 +828,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 				}
 
 			}
-			else if (scroll > 0.5)
+			else if (scroll > 0.5 || platform::getControllerButtons().buttons[platform::ControllerButtons::LBumper].pressed)
 			{
 				if (gameData.currentItemSelected > 0)
 				{
@@ -818,7 +887,8 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 #pragma region block collisions and entity updates!
 	{
-			
+		auto playerPosLastFrame = player.entity.lastPosition;
+
 		auto chunkGetter = [](glm::ivec2 pos) -> ChunkData*
 		{
 			auto c = gameData.chunkSystem.getChunkSafeFromChunkPos(pos.x, pos.y);
@@ -831,8 +901,6 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 				return nullptr;
 			}
 		};
-
-
 
 		
 		if (gameData.killed)
@@ -938,8 +1006,16 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		gameData.c.position = gameData.entityManager.localPlayer.entity.position
 			+ glm::dvec3(0,1.5,0);
 
+
 		gameData.entityManager.doAllUpdates(deltaTime, chunkGetter, gameData.serverTimer);
 
+
+		gameData.cameraShaker.updateCameraShake(deltaTime, movementForCameraShake, 
+			glm::vec3(player.entity.position - playerPosLastFrame) * deltaTime,
+			gameData.justDamaged);
+
+
+		gameData.cameraShaker.applyCameraShake(gameData.c);
 
 
 	}
@@ -970,10 +1046,11 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		}
 
 		constexpr static float TARGET_DIST = 20;
+		float dist = TARGET_DIST;
+
 
 		raycastBlock = gameData.chunkSystem.rayCast(cameraRayPos, gameData.c.viewDirection,
 			rayCastPos, TARGET_DIST, blockToPlace, raycastDist);
-		float dist = TARGET_DIST;
 
 		if (raycastBlock)
 		{
@@ -1019,9 +1096,8 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		auto &item = player.inventory.items[gameData.currentItemSelected];
 		auto weaponStats = item.getWeaponStats();
 
-
 		targetedEntity = gameData.entityManager.intersectAllAttackableEntities(cameraRayPos,
-			gameData.c.viewDirection, dist, entityHitDistance,
+			gameData.c.viewDirection, std::min(dist, weaponStats.range) , entityHitDistance,
 			weaponStats.getAccuracyAdjusted());
 
 		//std::cout << targetedEntity << "\n";
@@ -1037,7 +1113,17 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			//todo special function here
 			if (raycastBlock->getType() != BlockTypes::water)
 			{
-				programData.gyzmosRenderer.drawCube(rayCastPos);
+				auto collider = raycastBlock->getCollider();
+				collider.offset.y -= (1.f - collider.size.y) / 2.f;
+				programData.gyzmosRenderer.drawCube(rayCastPos, collider.offset, collider.size);
+
+				if (raycastBlock->hasSecondCollider())
+				{
+					auto collider = raycastBlock->getSecondCollider();
+					collider.offset.y -= (1.f - collider.size.y) / 2.f;
+					programData.gyzmosRenderer.drawCube(rayCastPos, collider.offset, collider.size);
+				}
+
 			}
 			else
 			{
@@ -1377,7 +1463,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 										gameData.lightSystem,
 										player.inventory,
 										player.otherPlayerSettings.gameMode == OtherPlayerSettings::SURVIVAL,
-										faceDirection, topPartForSlabs, isOnWall
+										faceDirection, topPartForSlabs, isOnWall, gameData.entityManager
 									);
 
 
@@ -1469,7 +1555,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 								gameData.chunkSystem.breakBlockByClient(rayCastPos
 									, gameData.undoQueue,
 									gameData.entityManager.localPlayer.entity.position,
-									gameData.lightSystem);
+									gameData.lightSystem, gameData.entityManager);
 								gameData.currentBlockBreaking = {};
 							}
 							else
@@ -1572,7 +1658,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 	{
 		gameData.gameplayFrameProfiler.startSubProfile("chunkSystem");
 		gameData.chunkSystem.update(blockPositionPlayer, deltaTime, gameData.undoQueue,
-			gameData.lightSystem, gameData.interaction, threadPoolForChunkBaking, programData.renderer);
+			gameData.lightSystem, gameData.interaction, threadPoolForChunkBaking, programData.renderer, gameData.entityManager);
 		gameData.gameplayFrameProfiler.endSubProfile("chunkSystem");
 	}
 
@@ -1900,6 +1986,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 					= gameData.entityManager.localPlayer.entity.position;
 
 				ImGui::Text("Entity pos: %lf, %lf, %lf", player.entity.position.x, player.entity.position.y, player.entity.position.z);
+				ImGui::Text("Entity velocity magnitude: %f", glm::length(player.entity.forces.velocity));
 				ImGui::Text("camera float: %f, %f, %f", posFloat.x, posFloat.y, posFloat.z);
 				ImGui::Text("camera int: %d, %d, %d", posInt.x, posInt.y, posInt.z);
 				ImGui::Text("camera view: %f, %f, %f", gameData.c.viewDirection.x, gameData.c.viewDirection.y, gameData.c.viewDirection.z);
@@ -2020,7 +2107,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 					StructureData *s = (StructureData *)data.data();
 
-					s->size = gameData.pointSize;
+					s->sizeNotRotated = gameData.pointSize;
 					s->unused = 0;
 
 					for (int x = 0; x < gameData.pointSize.x; x++)
@@ -2051,24 +2138,29 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 					if (sfs::readEntireFile(data, fileBuff) ==
 						sfs::noError)
 					{
-						StructureData *s = (StructureData *)data.data();
+						int rotation = 0;
 
-						for (int x = 0; x < s->size.x; x++)
-							for (int z = 0; z < s->size.z; z++)
-								for (int y = 0; y < s->size.y; y++)
+						StructureData *s = (StructureData *)data.data();
+						auto size = s->getSizeRotated(rotation);
+
+						for (int x = 0; x < size.x; x++)
+							for (int z = 0; z < size.z; z++)
+								for (int y = 0; y < size.y; y++)
 								{
 									glm::ivec3 pos = gameData.point + glm::ivec3(x, y, z);
 
-									Block block = s->unsafeGet(x, y, z);
+									Block block = s->unsafeGetRotated(x, y, z, rotation);
+									block.rotate(rotation);
+									
 
 									//todo implement the bulk version...
 									gameData.chunkSystem.placeBlockByClientForce(pos,
 										block, gameData.undoQueue,
-										gameData.lightSystem);
+										gameData.lightSystem, gameData.entityManager);
 
 								}
 
-						gameData.pointSize = s->size;
+						gameData.pointSize = size;
 					}
 
 
@@ -2083,6 +2175,8 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			{
 				ImGui::Image((void *)gameData.sunShadow.shadowTexturePreview.color, {256, 256}, 
 					{0, 1}, {1, 0});
+				//ImGui::Image((void *)gameData.sunShadow.shadowMap.depth, {256, 256},
+				//	{0, 1}, {1, 0});
 			}
 
 			if (ImGui::CollapsingHeader("HBAO Map",
@@ -2257,6 +2351,8 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 			//ImGui::Checkbox("Water Refraction",
 			//	&programData.renderer.waterRefraction);
 			
+			ImGui::Checkbox("FXAA",
+				&getShadingSettings().FXAA);
 
 			if (ImGui::CollapsingHeader("Music ",
 				ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_FramePadding))
@@ -2311,8 +2407,8 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 	if (hitStatus.hit)
 	{
-		std::cout << "Corectness: " << hitStatus.hitCorectness << "\n";
-		std::cout << "Bonus Crit: " << hitStatus.bonusCritChance << "\n";
+		//std::cout << "Corectness: " << hitStatus.hitCorectness << "\n";
+		//std::cout << "Bonus Crit: " << hitStatus.bonusCritChance << "\n";
 
 		if (targetedEntity && !stopMainInput && hitStatus.hitCorectness > 0)
 		{
@@ -2338,8 +2434,12 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 				if (!isCreativePlayer)
 				{
+					//std::cout << "Attack! ";
+
 					attackEntity(targetedEntity, gameData.currentItemSelected,
 						gameData.c.viewDirection, hitStatus);
+
+					AudioEngine::playHitSound();
 				}
 
 			};
@@ -2367,7 +2467,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 		{
 			if (programData.ui.renderBaseBlockUI(deltaTime, w, h, programData,
 				gameData.interaction.baseBlockHolder, gameData.interaction.blockInteractionPosition,
-				gameData.chunkSystem, gameData.undoQueue, gameData.lightSystem))
+				gameData.chunkSystem, gameData.undoQueue, gameData.lightSystem, gameData.entityManager))
 			{
 
 				auto block = gameData.chunkSystem.getBlockSafe(gameData.interaction.blockInteractionPosition.x, gameData.interaction.blockInteractionPosition.y,
@@ -2822,6 +2922,46 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 	}
 
+	//close inventory, drop the item held in mouse
+	if (!gameData.insideInventoryMenu)
+	{
+		auto &itemHeld = player.inventory.heldInMouse;
+
+		if (itemHeld.type)
+		{
+
+
+			for (int i = PlayerInventory::INVENTORY_CAPACITY-1; i >=0 ; i--)
+			{
+				auto &slot = *player.inventory.getItemFromIndex(i);
+
+				if (slot.type == 0)
+				{
+					swapItems(player.inventory, i, PlayerInventory::CURSOR_INDEX);
+					break;
+				}else
+				if (areItemsTheSame(itemHeld, slot))
+				{
+					placeItem(player.inventory, PlayerInventory::CURSOR_INDEX, i);
+				}
+
+				if (itemHeld.counter == 0) { break; }
+
+			}
+
+			if (itemHeld.counter != 0)
+			{
+				gameData.entityManager.dropItemByClient(
+					gameData.entityManager.localPlayer.entity.position,
+					PlayerInventory::CURSOR_INDEX, gameData.undoQueue, gameData.c.viewDirection * 5.f,
+					gameData.serverTimer, player.inventory, 0);
+			}
+
+			
+
+		}
+	}
+
 	player.inventory.sanitize();
 
 #pragma endregion
@@ -2872,7 +3012,7 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 	if (gameData.killed)
 	{
-		programData.ui.renderer2d.renderRectangle({0,0, w,h}, {0.9,0,0,0.5});
+		programData.ui.renderer2d.renderRectangle({0,0, w,h}, {0.1,0,0,0.6});
 	}
 
 	if (gameData.escapePressed)
@@ -2957,6 +3097,11 @@ bool gameplayFrame(float deltaTime, int w, int h, ProgramData &programData)
 
 
 #pragma endregion
+
+
+	//reset stuff
+	gameData.justDamaged = false;
+
 
 	//updateviewdistance changeviewdistance updaterenderdistance
 	gameData.chunkSystem.changeRenderDistance(getShadingSettings().viewDistance * 2, true);

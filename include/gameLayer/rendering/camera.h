@@ -50,6 +50,7 @@ struct Camera
 
 	void moveFPS(glm::vec3 direction);
 	void rotateFPS(glm::ivec2 mousePos, float speed, bool shouldMove);
+	void rotateFPSController(glm::vec2 vector, float speed);
 	glm::ivec2 lastMousePos = {};
 
 	glm::mat4x4 lastFrameViewProjMatrix = getProjectionMatrix() * getViewMatrix();
@@ -85,3 +86,7 @@ glm::ivec3 from3DPointToBlock(glm::dvec3 in);
 
 
 glm::mat4 lookAtSafe(glm::vec3 const &eye, glm::vec3 const &center, glm::vec3 const &upVec);
+
+glm::dmat4 lookAtSafe(glm::dvec3 const &eye, glm::dvec3 const &center, glm::dvec3 const &upVec);
+
+

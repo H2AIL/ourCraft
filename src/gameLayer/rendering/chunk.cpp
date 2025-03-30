@@ -151,14 +151,6 @@ bool getRandomChance(int x, int y, int z, float chance)
 }
 
 
-float getRandomNumberFloat(int x, int y, int z, float a, float b)
-{
-	std::minstd_rand rng;
-	rng.seed(hash(x, y, z));
-
-	return getRandomNumberFloat(rng, a, b);
-}
-
 bool Chunk::bake(Chunk *left, Chunk *right, Chunk *front, Chunk *back, 
 	Chunk *frontLeft, Chunk *frontRight, Chunk *backLeft, Chunk *backRight,
 	glm::ivec3 playerPosition,
@@ -1587,7 +1579,7 @@ bool Chunk::bakeAndDontSendDataToOpenGl(Chunk *left,
 
 				if ((sides[2] != nullptr) && (sides[2]->isOpaque()))
 				{
-					aoShape == 13; //full shadow
+					aoShape = 13; //full shadow
 				}
 
 				//bool isInWater = (sides[2] != nullptr) && sides[2]->getType() == BlockTypes::water;

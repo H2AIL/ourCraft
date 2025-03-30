@@ -2,6 +2,8 @@
 #include <gameplay/entity.h>
 #include <gameplay/life.h>
 #include <random>
+#include <unordered_map>
+#include <unordered_set>
 
 
 struct Zombie: public PhysicalEntity, public CanPushOthers
@@ -48,7 +50,12 @@ struct ZombieServer: public ServerEntity<Zombie>
 		ServerChunkStorer &serverChunkStorer, std::minstd_rand &rng, std::uint64_t yourEID,
 		std::unordered_set<std::uint64_t> &othersDeleted,
 		std::unordered_map<std::uint64_t, std::unordered_map<glm::ivec3, PathFindingNode>> &pathFinding,
-		std::unordered_map<std::uint64_t, glm::dvec3> &playersPosition);
+		std::unordered_map<std::uint64_t, glm::dvec3> &playersPosition,
+		std::unordered_map < std::uint64_t, Client *> &allClients);
+
+	//todo
+	bool isUnaware() { return  false; }
+	void signalHit(glm::vec3 direction) {};
 
 };
 

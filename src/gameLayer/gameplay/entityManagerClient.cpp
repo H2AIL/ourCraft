@@ -13,6 +13,10 @@
 template<class T>
 void genericDropEntitiesThatAreTooFar(T &container, glm::ivec2 playerPos2D, int playerSquareDistance)
 {
+
+	//no need to drop entities that are based on block position because we drop them with the chunk
+	if (hasPositionBasedID<decltype((container)[0].entityBuffered)>) { return; }
+
 	for (auto it = container.begin(); it != container.end(); )
 	{
 		auto entityPos = it->second.getPosition();
@@ -134,7 +138,7 @@ bool ClientEntityManager::dropItemByClient(
 	packetData.type = from->type;
 	packetData.revisionNumberInventory = inventory.revisionNumber;
 
-	std::cout << "My revision : " << (int)inventory.revisionNumber << "\n";
+	//std::cout << "My revision : " << (int)inventory.revisionNumber << "\n";
 
 	sendPacket(getServer(), p, (char *)&packetData, sizeof(packetData), true,
 		channelChunksAndBlocks);
@@ -411,7 +415,24 @@ std::uint64_t genericIntersectAllAttackableEntities(T &container, glm::dvec3 sta
 	{
 		auto collider = e.second.entityBuffered.getColliderSize();
 
-		bool rez = lineIntersectBoxMaxDistance(start, dir, e.second.getRubberBandPosition(), collider,
+		glm::dvec3 position = {};
+
+		if constexpr (hasPositionBasedID<decltype((container)[0].entityBuffered)>)
+		{
+			position = fromEntityIDToBlockPos(e.first);
+			position.y -= 0.5;
+		}
+		else
+		{
+			position = e.second.getRubberBandPosition();
+		}
+
+		if constexpr (hasGetColliderOffset<decltype((container)[0].entityBuffered)>)
+		{
+			position += e.second.entityBuffered.getColliderOffset();
+		}
+
+		bool rez = lineIntersectBoxMaxDistance(start, dir, position, collider,
 			maxDistance, outIntersectDist, delta);
 
 		if (rez) { return e.first; }
@@ -498,10 +519,26 @@ void genericRenderColliders(T &container,
 		pointDebugRenderer.
 			renderPoint(camera, p.second.getRubberBandPosition());
 
-		auto boxSize = p.second.entityBuffered.getColliderSize();
-		auto pos = p.second.getRubberBandPosition();
+		glm::dvec3 position = {};
 
-		drawBox(pos, boxSize);
+		if constexpr (hasPositionBasedID<decltype((container)[0].entityBuffered)>)
+		{
+			position = fromEntityIDToBlockPos(p.first);
+			position.y -= 0.5;
+		}
+		else
+		{
+			position = p.second.getRubberBandPosition();
+		}
+
+		if constexpr (hasGetColliderOffset<decltype((container)[0].entityBuffered)>)
+		{
+			position += p.second.entityBuffered.getColliderOffset();
+		}
+
+		auto boxSize = p.second.entityBuffered.getColliderSize();
+
+		drawBox(position, boxSize);
 	}
 
 }
@@ -526,6 +563,26 @@ void ClientEntityManager::renderColiders(PointDebugRenderer &pointDebugRenderer,
 		std::make_integer_sequence<int, EntitiesTypesCount>(), *this,
 		pointDebugRenderer, gyzmosRenderer, c);
 
+
+}
+
+void ClientEntityManager::removeBlockEntity(glm::ivec3 pos, BlockType blockType)
+{
+
+	if (blockType == BlockTypes::trainingDummy)
+	{
+		removeEntityBasedOnBlockPosition<EntityType::trainingDummy>(pos.x, pos.y, pos.z);
+	}
+
+}
+
+void ClientEntityManager::addBlockEntity(glm::ivec3 pos, BlockType blockType)
+{
+
+	if (blockType == BlockTypes::trainingDummy)
+	{
+		addEmptyEntityBasedOnBlockPosition<EntityType::trainingDummy>(pos.x, pos.y, pos.z);
+	}
 
 }
 

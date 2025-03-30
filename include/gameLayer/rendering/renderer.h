@@ -106,6 +106,7 @@ struct Renderer
 		void copyColorFromMainFBO(int w, int h);
 
 		void copyDepthToMainFbo(int w, int h);
+		void copyDepthAndColorToMainFbo(int w, int h);
 		void copyDepthFromOtherFBO(GLuint other, int w, int h);
 		void copyColorFromOtherFBO(GLuint other, int w, int h);
 		void copyDepthAndColorFromOtherFBO(GLuint other, int w, int h);
@@ -220,6 +221,24 @@ struct Renderer
 		uniform u_mip = -1;
 	}filterDownShader;
 
+	//http://blog.simonrodriguez.fr/articles/2016/07/implementing_fxaa.html
+	struct FXAAData
+	{
+		float edgeMinTreshold = 0.028;
+		float edgeDarkTreshold = 0.125;
+		int ITERATIONS = 12;
+		float quaityMultiplier = 0.8;
+		float SUBPIXEL_QUALITY = 0.95;
+	}fxaaData;
+
+
+	struct FXAAShader
+	{
+		Shader shader;
+		uniform u_texture = -1;
+
+	}fxaaShader;
+
 	struct AddMipsShader
 	{
 		Shader shader;
@@ -239,6 +258,7 @@ struct Renderer
 	{
 		Shader shader;
 		uniform u_waterDropsPower;
+		uniform u_hitIntensity;
 		uniform u_SSGR;
 	}applyBloomDataShader;
 
@@ -513,7 +533,9 @@ struct GyzmosRenderer
 
 	struct CubeData
 	{
-		int x=0, y=0, z=0;
+		int x = 0, y = 0, z = 0, unused = 0;
+		float posFloatX = 0, posFloatY = 0, posFloatZ = 0, posFloat2 = 0;
+		float sizeX = 0, sizeY = 0, sizeZ = 0, unused3 = 0;
 	};
 
 
@@ -545,6 +567,10 @@ struct GyzmosRenderer
 
 	void drawCube(int x, int y, int z) { cubes.push_back({x, y, z}); };
 	void drawCube(glm::ivec3 pos) { drawCube(pos.x, pos.y, pos.z); };
+	void drawCube(glm::ivec3 pos, glm::vec3 posFloat, glm::vec3 size)
+		{ cubes.push_back({pos.x, pos.y, pos.z, 0, 
+		posFloat.x,posFloat.y,posFloat.z,0,
+		size.x, size.y, size.z, 0}); };
 
 	//todo not working at far distances rn
 	void drawLine(glm::dvec3 a, glm::dvec3 b) { lines.push_back({a, b}); }

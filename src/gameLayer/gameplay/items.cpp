@@ -2,6 +2,7 @@
 #include <serializing.h>
 #include <platformTools.h>
 #include <iostream>
+#include <climits>
 #include <magic_enum.hpp>
 
 //todo can be placed
@@ -47,7 +48,7 @@ void Item::formatIntoData(std::vector<unsigned char> &data)
 {
 	if (type == 0 || counter == 0)
 	{
-		writeData(data, unsigned short(0));
+		writeData(data, (unsigned short)(0));
 	}
 	else
 	{
@@ -78,7 +79,7 @@ void Item::formatIntoData(std::vector<unsigned char> &data)
 	}
 
 	static_assert(sizeof(unsigned short) == sizeof(type));
-	static_assert(sizeof(unsigned char) == sizeof(counter));
+	static_assert(sizeof(unsigned short) == sizeof(counter));
 }
 
 int Item::readFromData(void *data, size_t size)
@@ -98,28 +99,28 @@ int Item::readFromData(void *data, size_t size)
 	}
 	else
 	{
-		if (size < 3)
+		if (size < 4)
 		{
 			return -1;
 		}
 
 		readDataUnsafe((unsigned char*)data + 2, counter);
 
-		if (size < 5)
+		if (size < 6)
 		{
 			return -1;
 		}
 
 		unsigned short metaDataSize = 0;
-		readDataUnsafe((unsigned char *)data + 3, metaDataSize);
+		readDataUnsafe((unsigned char *)data + 4, metaDataSize);
 
-		if (size - 5 < metaDataSize)
+		if (size - 6 < metaDataSize)
 		{
 			return -1; 
 		}
 
 		metaData.resize(metaDataSize);
-		readDataIntoVectorUnsafeUnresized((unsigned char *)data + 5, 0, metaDataSize, metaData);
+		readDataIntoVectorUnsafeUnresized((unsigned char *)data + 7, 0, metaDataSize, metaData);
 
 		//if (hasDurability())
 		//{
@@ -136,7 +137,7 @@ int Item::readFromData(void *data, size_t size)
 		//else
 
 		{
-			return 5 + metaDataSize; //one short + one char + one short
+			return 6 + metaDataSize; //one short + one char + one short
 		}
 
 	}
@@ -163,15 +164,15 @@ void Item::sanitize()
 
 }
 
-unsigned char Item::getStackSize()
+unsigned short Item::getStackSize()
 {
-	if (isTool() || isPaint())
+	if (isTool() || isPaint() || isWeapon())
 	{
 		return 1;
 	}
 	else
 	{
-		return 64;
+		return 999;
 	}
 
 }
@@ -317,6 +318,7 @@ WeaponStats Item::getWeaponStats()
 		 case trainingSword:
 		 {
 			 stats.damage = 200;
+			 stats.range = 10;
 		 }
 		 break;
 
@@ -490,6 +492,7 @@ int PlayerInventory::tryPickupItem(const Item &item)
 }
 
 
+
 //for textures
 const char *itemsNamesTextures[] = 
 {
@@ -652,12 +655,14 @@ bool canItemBeMovedToAndMoveIt(Item &from, Item &to)
 
 
 //create item createItem
-Item itemCreator(unsigned short type, unsigned char counter)
+Item itemCreator(unsigned short type, unsigned short counter)
 {
 	if (!counter) { return {}; }
 
 	Item ret(type);
 	ret.counter = counter;
+
+	ret.sanitize();
 
 	return ret;
 }
@@ -776,9 +781,9 @@ char *blockNames[] = {
 	"Coarse Dirt",
 	"Birch Planks",
 	"Path Block",
-	"Planked Wall Block",
-	"Planked Wall Stairs",
-	"Planked Wall",
+	"Planked Stone Block",
+	"Planked Stone Stairs",
+	"Planked Stone",
 	"Terracotta",
 	"Terracotta Stairs",
 	"Terracotta Slabs",
@@ -924,6 +929,9 @@ char *blockNames[] = {
 	"Mossy Cobblestone Slab",
 	"Mossy Cobblestone Wall",
 	"Cobweb",
+	"Hay balde",
+	"Training dummy",
+	"Target",
 };
 
 std::string Item::getItemName()

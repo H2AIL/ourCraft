@@ -79,6 +79,9 @@ struct ModelsManager
 
 	Model goblin;
 
+	Model trainingDummy;
+
+
 	enum BlockModels
 	{
 		chairModel,
@@ -113,6 +116,8 @@ struct ModelsManager
 		slabModel,
 		stairsModel,
 		wallModel,
+		trainingDummyBaseModel,
+		targetModel,
 
 		BLOCK_MODELS_COUNT
 
@@ -130,7 +135,8 @@ struct ModelsManager
 		PigTexture,
 		CatTexture,
 		GoblinTexture,
-		HelmetTestTexture
+		TrainingDummyTexture,
+		HelmetTestTexture,
 	};
 
 	std::vector<GLuint64> gpuIds;
@@ -138,6 +144,8 @@ struct ModelsManager
 
 	GLuint texturesSSBO = 0;
 
+	gl2d::Texture temporaryPlayerHandTexture = {};
+	GLuint64 temporaryPlayerHandBindlessTexture = 0;
 
 	void setupSSBO();
 };

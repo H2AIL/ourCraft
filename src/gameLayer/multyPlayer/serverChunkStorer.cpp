@@ -6,7 +6,8 @@
 #include <platformTools.h>
 #include <repeat.h>
 #include <gameplay/blocks/blocksWithData.h>
-
+#include <algorithm>
+#include <multyPlayer/doHittingThings.h>
 
 template<class T>
 void genericCheckEntitiesForCollisions(T &container, std::vector<ColidableEntry> &ret, glm::dvec3 position,
@@ -25,6 +26,10 @@ void genericCheckEntitiesForCollisions(T &container, std::vector<ColidableEntry>
 				other.eid = e.first;
 				other.position = e.second.getPosition();
 				other.collider = e.second.entity.getColliderSize();
+
+				if constexpr (hasGetColliderOffset<decltype(e.second.entity)>) { other.position += e.second.entity.getColliderOffset(); }
+
+
 				ret.push_back(other);
 			}
 
@@ -80,6 +85,7 @@ std::vector<ColidableEntry> ServerChunkStorer::getCollisionsListThatCanPush(glm:
 					other.eid = e.first;
 					other.position = e.second.getPosition();
 					other.collider = e.second.entity.getColliderSize();
+					if constexpr (hasGetColliderOffset<decltype(e.second.entity)>) { other.position += e.second.entity.getColliderOffset(); }
 					ret.push_back(other);
 				}
 
@@ -104,6 +110,7 @@ std::vector<ColidableEntry> ServerChunkStorer::getCollisionsListThatCanPush(glm:
 					other.eid = e.first;
 					other.position = e.second->getPosition();
 					other.collider = e.second->entity.getColliderSize();
+					//if constexpr (hasGetColliderOffset<decltype(e.second->entity)>) { other.position += e.second->entity.getColliderOffset(); }
 					ret.push_back(other);
 				}
 
@@ -157,6 +164,7 @@ SavedChunk *ServerChunkStorer::getChunkOrGetNull(int posX, int posZ)
 	}
 }
 
+//old version!
 SavedChunk *ServerChunkStorer::getOrCreateChunk(int posX, int posZ,
 	WorldGenerator &wg,
 	StructuresManager &structureManager,
@@ -807,13 +815,12 @@ SavedChunk *ServerChunkStorer::getOrCreateChunk(int posX, int posZ,
 					}
 					newCreatedChunksSet.insert({d.x, d.z});
 				}
-
 			}
 
 			//trees
 			for (auto &s : newStructures)
 			{
-				generateStructure(s, structureManager, newCreatedChunksSet, sendNewBlocksToPlayers, 0);
+				//generateStructure(s, structureManager, newCreatedChunksSet, sendNewBlocksToPlayers, 0);
 			}
 
 		}
@@ -838,14 +845,137 @@ SavedChunk *ServerChunkStorer::getOrCreateChunk(int posX, int posZ,
 	return nullptr;
 }
 
+SavedChunk *ServerChunkStorer::getOrCreateChunk(int posX, int posZ, 
+	WorldGenerator &wg, StructuresManager &structureManager, 
+	BiomesManager &biomesManager, std::vector<SendBlocksBack> &sendNewBlocksToPlayers, 
+	WorldSaver &worldSaver, bool *wasGenerated, bool *wasLoaded)
+{
+
+	if (wasGenerated) { *wasGenerated = 0; }
+	if (wasLoaded) { *wasLoaded = 0; }
+
+#pragma region check if already generated
+	glm::ivec2 pos = {posX, posZ};
+	auto foundPos = savedChunks.find(pos);
+	if (foundPos != savedChunks.end())
+	{
+		permaAssertCommentDevelopement(foundPos->second, "chunk should not be nullpointer here!");
+		return foundPos->second;
+	}
+#pragma endregion
+
+#pragma region check if you can load it from a file and if not create the geometry!
+
+	SavedChunk *rez = new SavedChunk;
+
+	rez->chunk.x = posX;
+	rez->chunk.z = posZ;
+
+	std::vector<StructureToGenerate> newStructures;
+	newStructures.reserve(10); 
+
+	//this are chunks that have been just generated, so they need structures!
+	std::unordered_map<glm::ivec2, SavedChunk*, Ivec2Hash> newCreatedChunks;
+	std::unordered_map<glm::ivec2, SavedChunk *, Ivec2Hash> newCreatedOrLoadedChunks;
+	newCreatedChunks.reserve(10);
+	newCreatedOrLoadedChunks.reserve(10);
+
+	if (worldSaver.loadChunk(rez->chunk))
+	{
+		//we managed to load the chunk
+		if (wasLoaded) { *wasLoaded = true; }
+
+		//we loaded a chunk so no need to dirty here.
+		rez->otherData.dirty = false;
+		rez->otherData.dirtyBlockData = false;
+		//std::cout << "Loaded!\n";
+
+		worldSaver.loadBlockData(*rez);
+		if (rez->normalize())
+		{
+			rez->otherData.dirty = true;
+			rez->otherData.dirtyBlockData = true;
+		}
+	}
+	else
+	{
+		//create new chunk!
+		if (wasGenerated) { *wasGenerated = true; }
+
+		generateChunk(rez->chunk, wg, structureManager, biomesManager, newStructures);
+		rez->otherData.dirty = true;
+
+		newCreatedChunks[glm::ivec2{posX, posZ}] = rez;
+	}
+
+	newCreatedOrLoadedChunks[{posX, posZ}] =  rez;
+
+
+#pragma endregion
+
+
+#pragma region place previous ghost blocks
+
+	for (auto &c : newCreatedOrLoadedChunks)
+	{
+		auto &d = c.second->chunk;
+		if (placeGhostBlocksForChunk(d.x, d.z, d))
+		{
+			c.second->otherData.dirty = true;
+			c.second->otherData.dirtyBlockData = true; //probably not needed but just to be safe!
+		}
+	}
+
+#pragma endregion
+
+#pragma region place small structures
+
+	for (auto &s : newStructures)
+	{
+		generateStructure(s, structureManager, newCreatedOrLoadedChunks, sendNewBlocksToPlayers, 0);
+	}
+
+#pragma endregion
+
+
+
+#pragma region load entities
+
+	for (auto &c : newCreatedChunks)
+	{
+		worldSaver.loadEntityData(c.second->entityData, c.first);
+	}
+
+#pragma endregion
+
+
+#pragma region set newly loaded chunls
+
+	for (auto &c : newCreatedOrLoadedChunks)
+	{
+		savedChunks[c.first] = c.second;
+	}
+
+#pragma endregion
+
+
+	return rez;
+}
+
 bool ServerChunkStorer::generateStructure(StructureToGenerate s,
-	StructureData *structure, int rotation, 
-	std::unordered_set<glm::ivec2, Ivec2Hash> &newCreatedChunks, 
+	StructureDataAndFlags &structure, int rotation,
+	std::unordered_map<glm::ivec2, SavedChunk *, Ivec2Hash> &newCreatedOrLoadedChunks,
 	std::vector<SendBlocksBack> &sendNewBlocksToPlayers, 
 	std::vector<glm::ivec3> *controlBlocks, bool replace,
 	BlockType from, BlockType to)
 {
-	auto size = structure->size;
+	auto size = structure.data->getSizeRotated(rotation);
+
+	if (s.placeInCenter)
+	{
+		s.pos.x -= size.x / 2;
+		s.pos.z -= size.z / 2;
+	}
 
 	//the user can replace a block with another
 	auto replaceB = [&](Block &b)
@@ -875,21 +1005,114 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 	};
 
 
-	int bonusRandomHeight = 0;
+	int bonusRandomHeightTrees = 0;
 	if (s.addRandomTreeHeight)
 	{
-		bonusRandomHeight = chooseRandomElement(s.randomNumber4, 6) + 2;
+		bonusRandomHeightTrees = chooseRandomElement(s.randomNumber4, 6) + 2;
 	}
 
+	auto placeOneBlockLogic = [&](Block oldBlock, Block &newBlock, int x, int y, int z, unsigned char replaceAnything,
+		unsigned char oldBlockReplaceAnything,
+		bool canPlaceAir) -> bool
+	{
+
+		if (replaceAnything < oldBlockReplaceAnything) { return false; }
+
+		if (replaceAnything && canPlaceAir && newBlock.getType() == BlockTypes::air)
+		{
+			return true;
+		}
+
+		if (oldBlock.getType() == BlockTypes::air || replaceAnything)
+		{
+		
+			//we replace the new block with a variation if needed.
+			replaceB(newBlock);
+
+			//basic paint logic
+
+			if (s.paintLogicStuff)
+			{
+				if (newBlock.getType() == BlockTypes::birch_leaves)
+				{
+
+					int colors[] = 
+					{	0,
+						BlockColor::yellow,
+						BlockColor::brown,
+						BlockColor::brown,
+						0,
+						BlockColor::orange,
+						BlockColor::orange,
+						0,
+						0,
+						BlockColor::brown,
+						0,
+					};
+
+					int choice = getRandomNumberFloat(x, y, z, 0, 0.99) * 
+						(sizeof(colors)/sizeof(colors[0]));
+
+					newBlock.setColor(colors[choice]);
+				}
+				else
+				if (newBlock.getType() == BlockTypes::spruce_leaves_red)
+				{
+
+					int colors[] =
+					{	0,
+						BlockColor::brown,
+						0,
+						BlockColor::red,
+						0,
+						BlockColor::red,
+						0,
+						BlockColor::red,
+						0,
+					};
+
+					int choice = getRandomNumberFloat(x, y, z, 0, 0.99) *
+						(sizeof(colors) / sizeof(colors[0]));
+
+					newBlock.setColor(colors[choice]);
+				}
+
+			};
 
 
-	if (s.pos.y + size.y + bonusRandomHeight <= CHUNK_HEIGHT)
+			if (newBlock.getType() != BlockTypes::air)
+			{
+
+				//todo paint if needed.
+
+				if (controlBlocks)
+				{
+					if (isControlBlock(newBlock.getType()))
+					{
+						//controlBlocks->push_back({x,y,z});
+					}
+				}
+
+				return true;
+			}
+
+		}
+
+		return false;
+	};
+
+
+	//todo re add this!
+	bonusRandomHeightTrees = 0;
+	
+	
+	if (s.pos.y + size.y + bonusRandomHeightTrees <= CHUNK_HEIGHT)
 	{
 
 
 		glm::ivec3 startPos = s.pos;
 
-		if(bonusRandomHeight)
+		if(bonusRandomHeightTrees)
 		{
 
 			int x = startPos.x;
@@ -907,7 +1130,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			{
 				c->otherData.dirty = true;
 
-				for (int y = s.pos.y; y < s.pos.y + bonusRandomHeight; y++)
+				for (int y = s.pos.y; y < s.pos.y + bonusRandomHeightTrees; y++)
 				{
 					auto &b = c->chunk.unsafeGet(inChunkX, y, inChunkZ);
 					if (b.getType() == BlockTypes::air)
@@ -918,13 +1141,12 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			}
 			else {} //we can assume that this chunk is loaded so no need for ghost blocks...
 
-			startPos.y += bonusRandomHeight;
+			startPos.y += bonusRandomHeightTrees;
 		}
 
 		startPos.x -= size.x / 2;
 		startPos.z -= size.z / 2;
 		glm::ivec3 endPos = startPos + size;
-
 
 		for (int x = startPos.x; x < endPos.x; x++)
 			for (int z = startPos.z; z < endPos.z; z++)
@@ -933,72 +1155,85 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 				int chunkX = divideChunk(x);
 				int chunkZ = divideChunk(z);
 
-				//todo this will be replaced with also a check if the
-				//chunk was created in the past
-				auto c = getChunkOrGetNull(chunkX, chunkZ);
-
 				int inChunkX = modBlockToChunk(x);
 				int inChunkZ = modBlockToChunk(z);
 
-				constexpr bool replaceAnything = 0;
-
+				int replaceAnything = s.replaceOverAnything;
 				bool sendDataToPlayers = 0;
-				//auto it = newCreatedChunks.find({chunkX, chunkZ});
-				//if (it != newCreatedChunks.end())
-				//{
-				//	//todo server should know what chunks can the player see to corectly send him the data
-				//	//even if the chunk is not loaded in the server side
-				//	//std::cout << "Updating chunk info to player\n";
-				//	sendDataToPlayers = true;
-				//
-				//}
-				sendDataToPlayers = true;
+				SavedChunk *c = nullptr;
 
+				auto &collumFlags = structure.getPerCollomFlagsUnsafeRotated(x - startPos.x, z - startPos.z, rotation, 
+					structure.data->getSizeRotated(rotation));
 
+				//CASE 1: we place the block in one of the newly created or loaded CHUNKS!
+				auto it = newCreatedOrLoadedChunks.find({chunkX, chunkZ});
+				if (it != newCreatedOrLoadedChunks.end())
+				{
+					//this is a new chunk so we know for sure no player could already have had this chunk!
+					sendDataToPlayers = false;
+					c = it->second;
+				}
+				else
+				{
+					sendDataToPlayers = true;
+					c = getChunkOrGetNull(chunkX, chunkZ);
+				}
+
+				auto shouldReplaceAir = [&](int y)
+				{
+					bool replaceAir = 0;
+					if (s.replaceEnclosedColumsWithAir && collumFlags.hasBlocks)
+					{
+						if (y - startPos.y > collumFlags.minMax.x && y - startPos.y < collumFlags.minMax.y)
+						{
+							replaceAir = true;
+						}
+					}
+					//replaceAir = true; //TODO DEBUG TEST RREMOVE
+					return replaceAir;
+				};
+
+				// IF we have a chunk, we start placing blocks.
 				if (c)
 				{
 					c->otherData.dirty = true;
+
+
 					for (int y = startPos.y; y < endPos.y; y++)
 					{
 
+						bool replaceAir = shouldReplaceAir(y);
+
+
 						auto &b = c->chunk.unsafeGet(inChunkX, y, inChunkZ);
 
-						if (b.getType() == BlockTypes::air || replaceAnything)
+						auto oldBlock = b;
+						auto newBlock = structure.data->unsafeGetRotated(x - startPos.x, y - startPos.y, z - startPos.z, rotation);
+						newBlock.rotate(rotation);
+
+
+						if (placeOneBlockLogic(oldBlock, newBlock, x, y, z, replaceAnything, 0, replaceAir))
 						{
-							auto newB = structure->unsafeGetRotated(x - startPos.x, y - startPos.y, z - startPos.z,
-								rotation);
+							c->removeBlockWithData({inChunkX, y, inChunkZ}, oldBlock.getType());
+							b = newBlock; //we set the new block!
 
-							replaceB(newB);
-
-							if (newB.getType() != BlockTypes::air)
+							if (sendDataToPlayers)
 							{
-								b = newB;
-
-								if (sendDataToPlayers)
-								{
-									SendBlocksBack sendB;
-									sendB.pos = {x,y,z};
-									sendB.blockInfo = b;
-									sendNewBlocksToPlayers.push_back(sendB);
-								}
-
-								if (controlBlocks)
-								{
-									if (isControlBlock(newB.getType()))
-									{
-										controlBlocks->push_back({x,y,z});
-									}
-								}
+								SendBlocksBack sendB;
+								sendB.pos = {x,y,z};
+								sendB.blockInfo = b;
+								sendNewBlocksToPlayers.push_back(sendB);
 							}
+							
+						};
 
-						}
 					}
 				}
 				else
 				{
 
+					//CASE 3: we don't have this chunk, so we add some ghost blocks!
 					auto it = ghostBlocks.find({chunkX, chunkZ});
-
 
 					if (it == ghostBlocks.end())
 					{
@@ -1007,37 +1242,30 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 
 						for (int y = startPos.y; y < endPos.y; y++)
 						{
-							auto b = structure->unsafeGetRotated(x - startPos.x, y - startPos.y, z - startPos.z,
-								rotation);
+							bool replaceAir = shouldReplaceAir(y);
 
-							replaceB(b);
+							auto oldBlock = Block{};
+							auto newBlock = structure.data->unsafeGetRotated(x - startPos.x, y - startPos.y, z - startPos.z, rotation);
+							newBlock.rotate(rotation);
 
-							if (b.getType() != BlockTypes::air)
+							if (newBlock.air() && replaceAnything)
 							{
+								int a = 0;
+							}
 
+							if (placeOneBlockLogic(oldBlock, newBlock, x, y, z, replaceAnything, 0, replaceAir))
+							{
 								GhostBlock ghostBlock;
-								ghostBlock.type = b.typeAndFlags;
+								ghostBlock.block = newBlock;
 								ghostBlock.replaceAnything = replaceAnything;
 
-								rez[{inChunkX, y, inChunkZ}] = ghostBlock; //todo either ghost either send
-
-								if (sendDataToPlayers)
+								if (newBlock.air())
 								{
-									SendBlocksBack sendB;
-									sendB.pos = {x,y,z};
-									sendB.blockInfo = b;
-									sendNewBlocksToPlayers.push_back(sendB);
+									int a = 0;
 								}
 
-								if (controlBlocks)
-								{
-									if (isControlBlock(b.getType()))
-									{
-										controlBlocks->push_back({x,y,z});
-									}
-								}
-
-							};
+								rez[{inChunkX, y, inChunkZ}] = ghostBlock;
+							}
 
 						}
 
@@ -1048,63 +1276,58 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 					{
 						for (int y = startPos.y; y < endPos.y; y++)
 						{
-							auto b = structure->unsafeGetRotated(x - startPos.x, y - startPos.y, z - startPos.z,
-								rotation);
 
-							replaceB(b);
+							bool replaceAir = shouldReplaceAir(y);
 
-							if (b.getType() != BlockTypes::air)
+							int oldBlockReplaceAnything = 0;
+							auto oldBlock = Block{};
+							auto newBlock = structure.data->unsafeGetRotated(x - startPos.x, y - startPos.y, z - startPos.z, rotation);
+							newBlock.rotate(rotation);
+
+							auto blockIt = it->second.find({inChunkX, y, inChunkZ});
+							
+							if (blockIt != it->second.end())
 							{
+								oldBlock = blockIt->second.block;
+								oldBlockReplaceAnything = blockIt->second.replaceAnything;
+							}
+
+							bool allowed = 1;
+							if (blockIt != it->second.end())
+							{
+								if (replaceAnything > blockIt->second.replaceAnything)
+								{
+									//good we can replace the block
+								}
+								else
+								{
+									allowed = 0;
+								}
+							}
+
+							if(allowed)
+							if (placeOneBlockLogic(oldBlock, newBlock, x, y, z, replaceAnything, oldBlockReplaceAnything, replaceAir))
+							{
+
 								GhostBlock ghostBlock;
-								ghostBlock.type = b.getType();
+								ghostBlock.block = newBlock;
 								ghostBlock.replaceAnything = replaceAnything;
 
-								auto blockIt = it->second.find({inChunkX, y, inChunkZ});
+								if (newBlock.air())
+								{
+									int a = 0;
+								}
 
 								if (blockIt == it->second.end())
 								{
 									it->second[{inChunkX, y, inChunkZ}] = ghostBlock;
-
-									if (sendDataToPlayers)
-									{
-										SendBlocksBack sendB;
-										sendB.pos = {x,y,z};
-										sendB.blockInfo = b;
-										sendNewBlocksToPlayers.push_back(sendB);
-									}
-
-									if (controlBlocks)
-									{
-										if (isControlBlock(b.getType()))
-										{
-											controlBlocks->push_back({x,y,z});
-										}
-									}
 								}
 								else
 								{
-									if (replaceAnything)
-									{
-										blockIt->second = ghostBlock;
-
-										if (sendDataToPlayers)
-										{
-											SendBlocksBack sendB;
-											sendB.pos = {x,y,z};
-											sendB.blockInfo = b;
-											sendNewBlocksToPlayers.push_back(sendB);
-										}
-
-										if (controlBlocks)
-										{
-											if (isControlBlock(b.getType()))
-											{
-												controlBlocks->push_back({x,y,z});
-											}
-										}
-									}
+									blockIt->second = ghostBlock;
 								}
-							};
+
+							}
 
 						}
 					}
@@ -1122,15 +1345,23 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 
 bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 	StructuresManager &structureManager,
-	std::unordered_set<glm::ivec2, Ivec2Hash> &newCreatedChunks,
+	std::unordered_map<glm::ivec2, SavedChunk *, Ivec2Hash> &newCreatedOrLoadedChunks,
 	std::vector<SendBlocksBack> &sendNewBlocksToPlayers, 
 	std::vector<glm::ivec3> *controlBlocks)
 {
 	auto chooseRandomElement = [](float randVal, int elementCount)
 	{
+		randVal = std::min(randVal, 0.999f);
 		return int(floor(randVal * elementCount));
 	};
 
+	auto defaultGenerate = [&](std::vector<StructureDataAndFlags> &structure)
+	{
+		auto a = structure
+			[chooseRandomElement(s.randomNumber1, structure.size())];
+		return generateStructure(s, a, chooseRandomElement(s.randomNumber2, 4),
+			newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
+	};
 
 	if (s.type == Structure_Tree)
 	{
@@ -1139,7 +1370,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			[chooseRandomElement(s.randomNumber1, structureManager.trees.size())];
 
 		return generateStructure(s, tree,
-			chooseRandomElement(s.randomNumber2, 4), newCreatedChunks, sendNewBlocksToPlayers,
+			chooseRandomElement(s.randomNumber2, 4), newCreatedOrLoadedChunks, sendNewBlocksToPlayers,
 			controlBlocks);
 	}
 	else
@@ -1149,14 +1380,14 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 		auto tree = structureManager.jungleTrees
 			[chooseRandomElement(s.randomNumber1, structureManager.jungleTrees.size())];
 
-		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
 	}else if (s.type == Structure_PalmTree)
 	{
 
 		auto tree = structureManager.palmTrees
 			[chooseRandomElement(s.randomNumber1, structureManager.palmTrees.size())];
 
-		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedChunks,
+		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedOrLoadedChunks,
 			sendNewBlocksToPlayers, controlBlocks);
 
 	}else if (s.type == Structure_TreeHouse)
@@ -1165,7 +1396,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 		auto tree = structureManager.treeHouses
 			[chooseRandomElement(s.randomNumber1, structureManager.treeHouses.size())];
 
-		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedChunks,
+		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedOrLoadedChunks,
 			sendNewBlocksToPlayers, controlBlocks);
 
 	}else if (s.type == Structure_Pyramid)
@@ -1174,7 +1405,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 		auto tree = structureManager.smallPyramids
 			[chooseRandomElement(s.randomNumber1, structureManager.smallPyramids.size())];
 
-		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedChunks,
+		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4), newCreatedOrLoadedChunks,
 			sendNewBlocksToPlayers, controlBlocks);
 
 	}else if (s.type == Structure_BirchTree)
@@ -1183,7 +1414,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			[chooseRandomElement(s.randomNumber1, structureManager.birchTrees.size())];
 
 		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4),
-			newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+			newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
 
 	}else if (s.type == Structure_Igloo)
 	{
@@ -1191,7 +1422,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			[chooseRandomElement(s.randomNumber1, structureManager.igloos.size())];
 
 		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4),
-			newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+			newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
 
 	}
 	else
@@ -1203,13 +1434,13 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 		if (s.randomNumber3 > 0.5)
 		{
 			return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4),
-				newCreatedChunks, sendNewBlocksToPlayers, controlBlocks, true,
+				newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks, true,
 				BlockTypes::spruce_leaves, BlockTypes::spruce_leaves_red);
 		}
 		else
 		{
 			return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4),
-				newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+				newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
 		}
 	}else if (s.type == Structure_SpruceSlim)
 	{
@@ -1217,7 +1448,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			[chooseRandomElement(s.randomNumber1, structureManager.spruceTreesSlim.size())];
 
 		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4),
-			newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+			newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
 	}
 	else if (s.type == Structure_SmallStone)
 	{
@@ -1225,7 +1456,7 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			[chooseRandomElement(s.randomNumber1, structureManager.smallStones.size())];
 
 		return generateStructure(s, stone, chooseRandomElement(s.randomNumber2, 4),
-			newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+			newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
 	}
 	else if (s.type == Structure_TallSlimTree)
 	{
@@ -1233,7 +1464,446 @@ bool ServerChunkStorer::generateStructure(StructureToGenerate s,
 			[chooseRandomElement(s.randomNumber1, structureManager.tallTreesSlim.size())];
 
 		return generateStructure(s, tree, chooseRandomElement(s.randomNumber2, 4),
-			newCreatedChunks, sendNewBlocksToPlayers, controlBlocks);
+			newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
+	}
+	else if (s.type == Structure_AbandonedHouse)
+	{
+		defaultGenerate(structureManager.abandonedHouse);
+	}
+	else if (s.type == Structure_GoblinTower)
+	{
+		defaultGenerate(structureManager.goblinTower);
+	}
+	else if (s.type == Structure_AbandonedTrainingCamp)
+	{
+		defaultGenerate(structureManager.trainingCamp);
+	}
+	else if (s.type == Structure_StoneRuins)
+	{
+		defaultGenerate(structureManager.smallStoneRuins);
+	}
+	else if (s.type == Structure_MinesDungeon)
+	{
+
+		StructureToGenerate structureSettings = s;
+
+		structureSettings.replaceBlocks = true;
+		structureSettings.replaceEnclosedColumsWithAir = true;
+		structureSettings.replaceOverAnything = 100; //we start from 100 with dungeon type buildings!
+
+		std::minstd_rand rng(s.randomNumber1 * 1000000000);
+
+		auto generateOneFeature = [&](std::vector<StructureDataAndFlags> &structure, 
+			int rotation)
+		{
+			auto a = structure
+				[chooseRandomElement(getRandomNumberFloat(rng, 0, 0.999), structure.size())];
+			return generateStructure(structureSettings, a, rotation,
+				newCreatedOrLoadedChunks, sendNewBlocksToPlayers, controlBlocks);
+		};
+
+
+	#pragma region create dungeon layout
+
+
+		constexpr unsigned int MAX_DUNGEON_SIZE = 11;
+
+		struct DungeonPiece
+		{
+			int type = 0; // 0 none, 1 hall, 2 room, 3 entrance
+			int orientation = 0; //0 means left right (x), 1 means up down (Z)
+			char posX = 0;
+			char posZ = 0;
+		};
+
+		DungeonPiece dungeon[MAX_DUNGEON_SIZE][MAX_DUNGEON_SIZE] = {};
+
+		std::vector<DungeonPiece> nodes;
+		nodes.reserve(100);
+		int orientation = getRandomNumber(rng, 0, 1);
+		nodes.push_back(DungeonPiece{3, orientation, MAX_DUNGEON_SIZE/2,MAX_DUNGEON_SIZE/2});
+		dungeon[MAX_DUNGEON_SIZE / 2][MAX_DUNGEON_SIZE / 2] = nodes[0];
+
+
+		int totalNodesCount = getRandomNumber(rng, 3, 9) + getRandomNumber(rng, 3, 9);
+		//int totalNodesCount = 16;
+
+		for (int i = 0; i < totalNodesCount; i++)
+		{
+			int size = nodes.size();
+			if (!size) { break; }
+
+			int n = size-1;
+			if (getRandomChance(rng, 0.5)) //big chance we just continue from the latest thing
+			{
+				n = chooseRandomElement(getRandomNumberFloat(rng, 0, 0.999), size);
+			}
+
+			auto currentNode = nodes[n];
+
+			//fast remove element
+			if (n + 1 >= nodes.size())
+			{
+				nodes.pop_back();
+			}
+			else
+			{
+				std::swap(nodes[n], nodes.back());
+				nodes.pop_back();
+			}
+
+			if (currentNode.type == 2)
+			{
+				//room
+				int numberToSpawn = getRandomNumber(rng, 1, 4);
+				std::array<glm::ivec2, 4> directions{glm::ivec2{-1,0},{1,0},{0,1},{0,-1}};
+
+				std::shuffle(directions.begin(), directions.end(), rng);
+				bool bonus = false;
+
+				for (int i = 0; i < numberToSpawn; i++)
+				{
+					glm::ivec2 pos(currentNode.posX, currentNode.posZ);
+					pos += directions[i];
+
+					if (pos.x >= 0 && pos.y >= 0 && pos.x < MAX_DUNGEON_SIZE && pos.y < MAX_DUNGEON_SIZE &&
+						dungeon[pos.x][pos.y].type == 0)
+					{
+
+						//we can spawn!
+
+						if (getRandomChance(rng, 0.25))
+						{
+							//rare second room spawn!
+							DungeonPiece room;
+							room.posX = pos.x;
+							room.posZ = pos.y;
+							room.type = 2;
+							nodes.push_back(room);
+							dungeon[pos.x][pos.y] = room;
+						}
+						else
+						{
+							DungeonPiece hall;
+							hall.posX = pos.x;
+							hall.posZ = pos.y;
+							hall.type = 1;
+							if (directions[i].x == -1 || directions[i].x == 1)
+							{
+								hall.orientation = 0;
+							}
+							else
+							{
+								hall.orientation = 1;
+							}
+
+							nodes.push_back(hall);
+							dungeon[pos.x][pos.y] = hall;
+						}
+
+					}
+					else if (!bonus && numberToSpawn == 1)
+					{
+						bonus = true;
+						numberToSpawn++;
+					}
+				}
+			}
+			else //hall or entry
+			{
+				if (currentNode.orientation == 0)
+				{
+					int numberToSpawn = getRandomNumber(rng, 1, 2);
+
+					std::array<glm::ivec2, 2> directions{glm::ivec2{-1,0},{1,0}};
+
+					std::shuffle(directions.begin(), directions.end(), rng);
+					bool bonus = false;
+
+					for (int i = 0; i < numberToSpawn; i++)
+					{
+						glm::ivec2 pos(currentNode.posX, currentNode.posZ);
+						pos += directions[i];
+
+						if (pos.x >= 0 && pos.y >= 0 && pos.x < MAX_DUNGEON_SIZE && pos.y < MAX_DUNGEON_SIZE &&
+							dungeon[pos.x][pos.y].type == 0)
+						{
+							//we can spawn!
+							if (getRandomChance(rng, 0.25))
+							{
+								//rare second hall spawn!
+								DungeonPiece hall;
+								hall.posX = pos.x;
+								hall.posZ = pos.y;
+								hall.type = 1;
+								hall.orientation = currentNode.orientation;
+								nodes.push_back(hall);
+								dungeon[pos.x][pos.y] = hall;
+							}
+							else
+							{
+								DungeonPiece room;
+								room.posX = pos.x;
+								room.posZ = pos.y;
+								room.type = 2;
+								nodes.push_back(room);
+								dungeon[pos.x][pos.y] = room;
+							}
+
+						}
+						else if (!bonus && numberToSpawn == 1)
+						{
+							bonus = true;
+							numberToSpawn++;
+						}
+					}
+				}
+				else
+				{
+					int numberToSpawn = getRandomNumber(rng, 1, 2);
+
+					std::array<glm::ivec2, 2> directions{glm::ivec2{0,-1},{0,1}};
+
+					std::shuffle(directions.begin(), directions.end(), rng);
+					bool bonus = false;
+
+					for (int i = 0; i < numberToSpawn; i++)
+					{
+						glm::ivec2 pos(currentNode.posX, currentNode.posZ);
+						pos += directions[i];
+
+						if (pos.x >= 0 && pos.y >= 0 && pos.x < MAX_DUNGEON_SIZE && pos.y < MAX_DUNGEON_SIZE &&
+							dungeon[pos.x][pos.y].type == 0)
+						{
+							//we can spawn!
+							if (getRandomChance(rng, 0.25))
+							{
+								//rare second hall spawn!
+								DungeonPiece hall;
+								hall.posX = pos.x;
+								hall.posZ = pos.y;
+								hall.type = 1;
+								hall.orientation = currentNode.orientation;
+								nodes.push_back(hall);
+								dungeon[pos.x][pos.y] = hall;
+							}
+							else
+							{
+								//we can spawn!
+								DungeonPiece room;
+								room.posX = pos.x;
+								room.posZ = pos.y;
+								room.type = 2;
+								nodes.push_back(room);
+								dungeon[pos.x][pos.y] = room;
+							}
+						}
+						else if (!bonus && numberToSpawn == 1)
+						{
+							bonus = true;
+							numberToSpawn++;
+						}
+					}
+				}
+
+
+
+			}
+
+
+		}
+
+		//dungeon[5][5] = DungeonPiece{3,0};
+		//dungeon[4][5] = DungeonPiece{2,0};
+		//dungeon[4][6] = DungeonPiece{1,1};
+		//dungeon[4][7] = DungeonPiece{2,0};
+		//dungeon[6][5] = DungeonPiece{2,0};
+		//dungeon[7][5] = DungeonPiece{1,0};
+		//dungeon[8][5] = DungeonPiece{2,0};
+		//
+		//dungeon[3][3] = DungeonPiece{1,0};
+		//dungeon[2][2] = DungeonPiece{1,1};
+		//dungeon[3][2] = DungeonPiece{1,1};
+		//dungeon[2][3] = DungeonPiece{1,1};
+		//dungeon[1][2] = DungeonPiece{1,0};
+		//dungeon[2][1] = DungeonPiece{1,0};
+		//dungeon[1][1] = DungeonPiece{1,1};
+		//dungeon[1][0] = DungeonPiece{1,0};
+		//dungeon[0][1] = DungeonPiece{1,1};
+		//dungeon[0][0] = DungeonPiece{1,0};
+		//dungeon[2][0] = DungeonPiece{1,0};
+		//dungeon[0][2] = DungeonPiece{1,0};
+
+
+	#pragma endregion
+		glm::ivec3 originalPosition = structureSettings.pos;
+
+		int dungeonSize = structureManager.minesDungeonRoom[0].data->sizeNotRotated.x;
+
+	#pragma region place dungeon stuff
+
+		//dungeon
+		for (int x = 0; x < MAX_DUNGEON_SIZE; x++)
+			for (int z = 0; z < MAX_DUNGEON_SIZE; z++)
+			{
+				int type = dungeon[x][z].type;
+
+				int offsetX = x - MAX_DUNGEON_SIZE / 2;
+				int offsetZ = z - MAX_DUNGEON_SIZE / 2;
+
+				structureSettings.pos = originalPosition;
+				structureSettings.pos.x += offsetX * dungeonSize;
+				structureSettings.pos.z += offsetZ * dungeonSize;
+
+				int rotation = 0;
+				if (dungeon[x][z].orientation == 1) { rotation = 1; }
+
+				if (rotation == 0 && getRandomChance(rng, 0.5)) { rotation = 2; }
+				if (rotation == 1 && getRandomChance(rng, 0.5)) { rotation = 3; }
+
+				if (type == 3)
+				{
+					//structureSettings.pos.x -= dungeonSize / 2;
+					//structureSettings.pos.z -= dungeonSize / 2;
+					generateOneFeature(structureManager.minesDungeonEntrance, rotation);
+				}
+				else if (type == 1)
+				{
+					//structureSettings.pos.x -= dungeonSize / 2;
+					//structureSettings.pos.z -= dungeonSize / 2;
+					generateOneFeature(structureManager.minesDungeonHall, rotation);
+				}
+				else if (type == 2)
+				{
+					generateOneFeature(structureManager.minesDungeonRoom, 0);
+				}
+
+			}
+
+		//walls
+		for (int x = 0; x < MAX_DUNGEON_SIZE; x++)
+			for (int z = 0; z < MAX_DUNGEON_SIZE; z++)
+			{
+				int type = dungeon[x][z].type;
+
+				if (type == 0) { continue; }
+
+				int offsetX = x - MAX_DUNGEON_SIZE / 2;
+				int offsetZ = z - MAX_DUNGEON_SIZE / 2;
+
+
+				int placeUP = 0;
+				int placeDOWN = 0;
+				int placeLEFT = 0;
+				int placeRIGHT = 0;
+
+				if (x == 0) { placeLEFT = true; }
+				else
+				{
+					int type = dungeon[x - 1][z].type;
+					int orientation = dungeon[x - 1][z].orientation;
+					if (type == 0 || ((type == 1 || type == 3) && orientation == 1))
+					{
+						placeLEFT = true;
+					}
+				}
+
+				if (x == MAX_DUNGEON_SIZE-1) { placeRIGHT = true; } 
+				else
+				{
+					int type = dungeon[x + 1][z].type;
+					int orientation = dungeon[x + 1][z].orientation;
+					if (type == 0 || ((type == 1 || type == 3) && orientation == 1))
+					{
+						placeRIGHT = true;
+					}
+				}
+
+				if (z == 0) { placeUP = true; }
+				else
+				{
+					int type = dungeon[x][z - 1].type;
+					int orientation = dungeon[x][z - 1].orientation;
+					if (type == 0 || ((type == 1 || type == 3) && orientation == 0))
+					{
+						placeUP = true;
+					}
+				}
+
+				if (z == MAX_DUNGEON_SIZE - 1) { placeDOWN = true; }
+				else
+				{
+					int type = dungeon[x][z + 1].type;
+					int orientation = dungeon[x][z + 1].orientation;
+					if (type == 0 || ((type == 1 || type == 3) && orientation == 0))
+					{
+						placeDOWN = true;
+					}
+				}
+
+				if (type == 1 || type == 3)
+				{
+					if (dungeon[x][z].orientation == 0)
+					{
+						placeUP = false;
+						placeDOWN = false;
+					}
+					else
+					{
+						placeLEFT = false;
+						placeRIGHT = false;
+					}
+				}
+
+				if (placeUP)
+				{
+					structureSettings.pos = originalPosition;
+					structureSettings.pos.x += offsetX * dungeonSize;
+					structureSettings.pos.z += offsetZ * dungeonSize;
+
+					structureSettings.pos.z -= dungeonSize / 2 + 1;
+					generateOneFeature(structureManager.minesDungeonEnd, 1);
+				}
+
+				if (placeDOWN)
+				{
+					structureSettings.pos = originalPosition;
+					structureSettings.pos.x += offsetX * dungeonSize;
+					structureSettings.pos.z += offsetZ * dungeonSize;
+
+					structureSettings.pos.z += dungeonSize / 2;
+					generateOneFeature(structureManager.minesDungeonEnd, 1);
+				}
+
+				if (placeLEFT)
+				{
+					structureSettings.pos = originalPosition;
+					structureSettings.pos.x += offsetX * dungeonSize;
+					structureSettings.pos.z += offsetZ * dungeonSize;
+
+					structureSettings.pos.x -= dungeonSize / 2 + 1;
+					generateOneFeature(structureManager.minesDungeonEnd, 0);
+				}
+
+				if (placeRIGHT)
+				{
+					structureSettings.pos = originalPosition;
+					structureSettings.pos.x += offsetX * dungeonSize;
+					structureSettings.pos.z += offsetZ * dungeonSize;
+
+					structureSettings.pos.x += dungeonSize / 2;
+					generateOneFeature(structureManager.minesDungeonEnd, 0);
+				}
+
+			}
+
+
+
+	#pragma endregion
+
+		
+
+
 	}
 
 
@@ -1283,6 +1953,7 @@ Block *ServerChunkStorer::tryGetBlockIfChunkExistsNoChecks(glm::ivec3 pos)
 	return nullptr;
 }
 
+//given a chunk, we check if we have ghost blocks for it to be placed there
 bool ServerChunkStorer::placeGhostBlocksForChunk(int posX, int posZ, ChunkData &c)
 {
 	bool placed = 0;
@@ -1299,11 +1970,18 @@ bool ServerChunkStorer::placeGhostBlocksForChunk(int posX, int posZ, ChunkData &
 
 			auto &block = c.unsafeGet(pos.x, pos.y, pos.z);
 
+			if (b.second.block.air())
+			{
+				int a = 0;
+			}
+
 			if (b.second.replaceAnything || block.getType() == BlockTypes::air)
 			{
 				//todo rotation and stuff like that
 				//todo placed by server stuff
-				block.setType(b.second.type);
+				block.typeAndFlags = b.second.block.typeAndFlags;
+				block.colorAndOtherFlags = b.second.block.colorAndOtherFlags;
+				
 				placed = true;
 			}
 		}
@@ -1475,12 +2153,19 @@ bool ServerChunkStorer::entityAlreadyExists(std::uint64_t eid)
 template<class T>
 std::uint64_t genericCheckEntitiesForCollisionWithBlock(T &container, glm::ivec3 position)
 {
+	if constexpr (hasPositionBasedID<decltype(container[0].entity)>)
+	{ return 0; }
+
 	if constexpr (hasCollidesWithPlacedBlocks<decltype(container[0].entity)>)
 	{
 
 		for (auto &e : container)
 		{
-			auto rez = boxColideBlock(e.second.getPosition(), e.second.entity.getColliderSize(), position);
+			glm::dvec3 position = e.second.getPosition();
+
+			if constexpr (hasGetColliderOffset<decltype(e.second.entity)>) { position += e.second.entityBuffered.getColliderOffset(); }
+
+			auto rez = boxColideBlock(position, e.second.entity.getColliderSize(), position);
 			
 			if (rez)
 			{
@@ -1496,14 +2181,19 @@ template <int... Is>
 std::uint64_t callGenericCheckEntitiesForCollisionWithBlock(std::integer_sequence<int, Is...>,
 	EntityData &entityData, glm::ivec3 position)
 {
-
+	
 	if constexpr (hasCollidesWithPlacedBlocks<decltype(entityData.players[0]->entity)>)
 	{
 		for (auto &e : entityData.players)
 		{
 			if (e.second)
 			{
-				auto rez = boxColideBlock(e.second->getPosition(), e.second->entity.getColliderSize(), position);
+
+				glm::dvec3 positionPlayer = e.second->getPosition();
+				if constexpr (hasGetColliderOffset<decltype(e.second->entity)>) { positionPlayer += e.second->entityBuffered.getColliderOffset(); }
+
+
+				auto rez = boxColideBlock(positionPlayer, e.second->entity.getColliderSize(), position);
 
 				if (rez)
 				{
@@ -1644,75 +2334,6 @@ bool ServerChunkStorer::removeEntity(WorldSaver &worldSaver, std::uint64_t eid)
 	return 0;
 }
 
-
-//this is where we compute all hitting things!
-template<class T>
-void doHittingThings(T &e, glm::vec3 dir, glm::dvec3 playerPosition, 
-	Item &weapon, std::uint64_t &wasKilled, std::minstd_rand &rng, std::uint64_t currentId
-	, float hitCorectness, float critChanceBonus)
-{
-
-	if constexpr (hasCanBeAttacked<decltype(e.entity)>)
-	{
-		Life *life = 0;
-		Armour armour = {};
-
-	#pragma region get stuff
-		//the players are stored differently
-		if constexpr (std::is_same_v<T, PlayerServer>)
-		{
-			life = &e.newLife;
-			armour = e.getArmour();
-		}
-		else
-		{
-			life = &e.entity.life;
-			armour = e.entity.getArmour();
-		}
-	#pragma endregion
-
-		WeaponStats stats = weapon.getWeaponStats();
-
-		int damage = calculateDamage(armour, stats, rng,
-			hitCorectness, critChanceBonus);
-
-		//std::cout << "Damage: " << damage << "\n";
-
-		if (damage >= life->life)
-		{
-			wasKilled = currentId;
-			life->life = 0;
-		}
-		else
-		{
-			life->life -= damage;
-		}
-
-		glm::vec3 hitDir = dir;
-		hitDir += glm::vec3(0, 0.22, 0);
-		{
-			float l = glm::length(hitDir);
-			if (l == 0) { hitDir = {0,-1,0}; } else { hitDir /= l; }
-		}
-		
-		float knockBack = stats.knockBack;
-
-		//todo add knock back resistance
-		//std::cout << "Attacked!\n";
-		//std::cout << life->life << "\n";
-		//std::cout << &life->life << "\n";
-
-		knockBack = std::max(knockBack, 0.f);
-		e.applyHitForce(hitDir * knockBack);
-
-	}
-	else
-	{
-		return;
-	}
-
-}
-
 template<class T>
 bool genericHitEntityByPlayer(T &container, std::uint64_t eid, glm::vec3 dir,
 	glm::dvec3 playerPosition, Item &weapon, std::uint64_t &wasKilled, std::minstd_rand &rng
@@ -1726,12 +2347,12 @@ bool genericHitEntityByPlayer(T &container, std::uint64_t eid, glm::vec3 dir,
 
 		if constexpr (std::is_pointer_v<decltype(found->second)>)
 		{
-			doHittingThings(*found->second, dir, playerPosition, weapon, wasKilled, rng, 
+			doHittingThings(*found->second, dir, playerPosition, weapon.getWeaponStats(), wasKilled, rng,
 				eid, hitCorectness, critChanceBonus);
 		}
 		else
 		{
-			doHittingThings(found->second, dir, playerPosition, weapon, wasKilled, rng,
+			doHittingThings(found->second, dir, playerPosition, weapon.getWeaponStats(), wasKilled, rng,
 				eid, hitCorectness, critChanceBonus);
 		}
 

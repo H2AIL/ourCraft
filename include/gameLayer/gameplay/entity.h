@@ -6,13 +6,17 @@
 #include <glm/glm.hpp>
 #include <random>
 #include <glm/gtx/rotate_vector.hpp>
+#include <glm/gtx/quaternion.hpp>
+#include <iostream>
 #include <fstream>
-#include <unordered_set>
+#include <algorithm>
 #include <rendering/camera.h>
 #include <gameplay/effects.h>
 #include <rendering/model.h>
 #include <easing.h>
+#include <gameplay/weaponStats.h>
 
+struct Client;
 
 //basic entity structure
 //
@@ -133,10 +137,33 @@ template <typename T>
 constexpr bool hasEyesAndPupils<T, std::void_t<decltype(std::declval<T>().eyesAndPupils)>> = true;
 
 
+//takes the look direction that is relative to body orientation and the body orientation to compute the real look direction
+[[nodiscard]]
+glm::vec3 computeLookDirection(glm::vec2 bodyOrientation, glm::vec3 lookDirection);
+
+[[nodiscard]]
+glm::vec3 moveVectorRandomly(glm::vec3 vector, std::minstd_rand &rng, float radiansX, float radiansY);
+
+[[nodiscard]]
+glm::vec3 moveVectorRandomlyBiasKeepCenter(glm::vec3 vector, std::minstd_rand &rng, float radiansX, float radiansY);
+
+[[nodiscard]]
+glm::vec3 orientVectorTowards(glm::vec3 vector, glm::vec3 target, float speed);
+
+
 struct HasOrientationAndHeadTurnDirection
 {
 	glm::vec2 bodyOrientation = {0,-1};
+	
+	//the look direction animation is relative to body orientatio!
 	glm::vec3 lookDirectionAnimation = {0,0,-1};
+
+	glm::vec3 getLookDirection()
+	{
+		glm::vec3 realLookDirection = glm::normalize(computeLookDirection(bodyOrientation, lookDirectionAnimation));
+		return realLookDirection;
+	}
+
 };
 
 template <typename T, typename = void>
@@ -184,12 +211,25 @@ template <typename T>
 constexpr bool hasSkinBindlessTexture<T, std::void_t<decltype(std::declval<T>().skinBindlessTexture)>> = true;
 
 
-template <typename T, typename = void>
-constexpr bool hasLife = false;
-
-template <typename T>
-constexpr bool hasLife<T, std::void_t<decltype(std::declval<T>().life)>> = true;
-
+#pragma region has life
+	// Check if a type has a member named `life`
+	template <typename T, typename = void>
+	struct HasLifeMember: std::false_type {};
+	
+	template <typename T>
+	struct HasLifeMember<T, std::void_t<decltype(std::declval<T>().life)>>: std::true_type {};
+	
+	// Check if a type has a member named `newLife`
+	template <typename T, typename = void>
+	struct HasNewLifeMember: std::false_type {};
+	
+	template <typename T>
+	struct HasNewLifeMember<T, std::void_t<decltype(std::declval<T>().newLife)>>: std::true_type {};
+	
+	// Combine both checks: true if either `life` or `newLife` exists
+	template <typename T>
+	constexpr bool hasLife = std::disjunction_v<HasLifeMember<T>, HasNewLifeMember<T>>;
+#pragma endregion
 
 
 
@@ -422,18 +462,34 @@ struct PhysicalEntity
 	void jump(float impulse = BASIC_JUMP_IMPULSE);
 
 	void move(glm::vec2 move);
+
+	void moveDynamic(glm::vec2 move, float deltaTime);
 };
 
-struct CanPushOthers
-{
-	constexpr static bool canPushOthers = true;
-};
-
+struct CanPushOthers { constexpr static bool canPushOthers = true; };
 template <typename T, typename = void>
 constexpr bool hasCanPushOthers = false;
-
 template <typename T>
 constexpr bool hasCanPushOthers<T, std::void_t<decltype(T::canPushOthers)>> = true;
+
+struct PositionBasedID { constexpr static bool positionBasedID = true; };
+template <typename T, typename = void>
+constexpr bool hasPositionBasedID = false;
+template <typename T>
+constexpr bool hasPositionBasedID<T, std::void_t<decltype(T::positionBasedID)>> = true;
+
+//this means the server won't automatically send packets and stuff like that to keep the entity sync
+struct NotSyncronizedEntity { constexpr static bool notSyncronizedEntity = true; };
+template <typename T, typename = void>
+constexpr bool hasNotSyncronizedEntity = false;
+template <typename T>
+constexpr bool hasNotSyncronizedEntity<T, std::void_t<decltype(T::notSyncronizedEntity)>> = true;
+
+
+template <typename T, typename = void>
+constexpr bool hasGetColliderOffset = false;
+template <typename T>
+constexpr bool hasGetColliderOffset<T, std::void_t<decltype(std::declval<T>().getColliderOffset())>> = true;
 
 
 template <typename T, typename = void>
@@ -493,6 +549,13 @@ constexpr bool hasCanHaveEffects <T, std::void_t<decltype(T::canHaveEffects)>> =
 template<bool B, typename T>
 using ConditionalMember = typename std::conditional<B, T, unsigned char>::type;
 
+
+
+constexpr std::uint64_t MASK_24 = 0xFFFFFF;
+constexpr std::uint64_t MASK_8 = 0xFF;
+
+std::uint64_t fromBlockPosToEntityID(int x, unsigned char y, int z, unsigned char entityType);
+glm::ivec3 fromEntityIDToBlockPos(std::uint64_t entityId, unsigned char *outEntityType = 0);
 
 
 template<class T>
@@ -620,11 +683,30 @@ struct StaticCircularBufferForBuffering
 template <class T>
 struct ServerEntity
 {
+
+	ServerEntity() //default values
+	{
+		if constexpr (::hasLookDirectionAnimation<T>)
+		{
+			wantToLookDirection = glm::vec3(0, 0, -1);
+		}
+	};
+
 	T entity = {};
 
 	glm::dvec3 &getPosition()
 	{
-		return entity.position;
+		//todo assert 0 !
+		if constexpr (hasPositionBasedID<T>)
+		{
+			thread_local static glm::dvec3 stub;
+			stub = {};
+			return stub;
+		}
+		else
+		{
+			return entity.position;
+		}
 	}
 
 	//knock back, this does not does any calculations.
@@ -642,6 +724,8 @@ struct ServerEntity
 	}
 
 	ConditionalMember<hasCanHaveEffects(), Effects> effects = {};
+
+	ConditionalMember<::hasLookDirectionAnimation<T>, glm::vec3> wantToLookDirection = {};
 
 	bool hasUpdatedThisTick = 0;
 	glm::ivec2 lastChunkPositionWhenAnUpdateWasSent = {};
@@ -670,12 +754,29 @@ struct ClientEntity
 
 	glm::dvec3 getRubberBandPosition()
 	{
-		return rubberBand.direction + entityBuffered.position;
+		if constexpr (!hasPositionBasedID<T>)
+		{
+			return rubberBand.direction + entityBuffered.position;
+		}
+		else
+		{
+			return glm::dvec3{};
+		}
+
 	}
 
 	glm::dvec3 &getPosition()
 	{
-		return entityBuffered.position;
+		if constexpr (!hasPositionBasedID<T>)
+		{
+			return entityBuffered.position;
+		}
+		else
+		{
+			thread_local static glm::dvec3 stub;
+			stub = {};
+			return stub;
+		}
 	}
 
 	glm::vec2 getRubberBandOrientation()
@@ -914,6 +1015,7 @@ struct ClientEntity
 		BASE_CLIENT *baseClient = (BASE_CLIENT *)this;
 
 	#pragma region compute buffering		
+		if constexpr(!hasPositionBasedID<T>) //no rubber banding for position based entities for now
 		{
 
 			//remove buffering and just use the latest event
@@ -1080,7 +1182,7 @@ struct ClientEntity
 			float timer = deltaTime + restantTime;
 			if (timer > 0)
 			{
-				auto oldPosition = baseClient->oldPositionForRubberBand;
+				//auto oldPosition = baseClient->oldPositionForRubberBand;
 				//baseClient->rubberBand.addToRubberBand(oldPosition - baseClient->getPosition());
 
 				//auto oldPosition = baseClient->getPosition();
@@ -1161,6 +1263,7 @@ constexpr bool hasRestantTimer<T, std::void_t<decltype(std::declval<T>().restant
 int getRandomNumber(std::minstd_rand &rng, int min, int max);
 
 float getRandomNumberFloat(std::minstd_rand &rng, float min, float max);
+float getRandomNumberFloat(int x, int y, int z, float a, float b);
 
 bool getRandomChance(std::minstd_rand &rng, float chance);
 
@@ -1173,7 +1276,6 @@ void setBodyAndLookOrientation(glm::vec2 &bodyOrientation, glm::vec3 &lookDirect
 void removeBodyRotationFromHead(glm::vec3 &lookDirection);
 void removeBodyRotationFromHead(glm::vec2 &bodyOrientation, glm::vec3 &lookDirection);
 
-glm::vec3 computeLookDirection(glm::vec2 bodyOrientation, glm::vec3 lookDirection);
 
 glm::vec2 getRandomUnitVector(std::minstd_rand &rng);
 glm::vec3 getRandomUnitVector3(std::minstd_rand &rng);
@@ -1215,3 +1317,4 @@ struct ServerChunkStorer;
 
 void doCollisionWithOthers(glm::dvec3 &positiom, glm::vec3 colider, 
 	MotionState &forces, ServerChunkStorer &serverChunkStorer, std::uint64_t &yourEID);
+

@@ -194,7 +194,7 @@ void Profiler::endFrame()
 }
 
 //
-void Profiler::startSubProfile(char *c)
+void Profiler::startSubProfile(const char *c)
 {
 	if (REMOVE_IMGUI) { return; }
 
@@ -209,7 +209,7 @@ void Profiler::startSubProfile(char *c)
 	}
 }
 
-void Profiler::endSubProfile(char *c)
+void Profiler::endSubProfile(const char *c)
 {
 	if (REMOVE_IMGUI) { return; }
 
@@ -243,7 +243,7 @@ void Profiler::setSubProfileManually(char *c, PL::ProfileRezults rezults)
 {
 	if (REMOVE_IMGUI) { return; }
 
-	assert(!gpuProfiler, "This function aint compatible with the gpu profiler!");
+	assert(!gpuProfiler && "This function aint compatible with the gpu profiler!");
 
 	subProfiles[c].end();
 	subProfiles[c].rezult = rezults;

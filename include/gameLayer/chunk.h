@@ -8,6 +8,21 @@
 #include <platform/platformTools.h>
 #define NOMINMAX
 
+//https://www.geeksforgeeks.org/how-to-create-an-unordered_map-of-user-defined-class-in-cpp/
+struct Ivec2Hash
+{
+	size_t operator()(const glm::ivec2 &in) const
+	{
+		int x = in.x;
+		int z = in.y;
+
+		size_t ret = 0;
+		ret += x;
+		ret += (z < 32);
+
+		return ret;
+	}
+};
 
 struct BigGpuBuffer;
 struct Renderer;
@@ -184,7 +199,7 @@ struct Chunk
 	std::vector<int> &transparentGeometry,
 	std::vector<glm::ivec4> &lights, int lod, Renderer &renderer);
 
-	bool Chunk::bakeAndDontSendDataToOpenGl(Chunk *left, Chunk *right, Chunk *front, Chunk *back,
+	bool bakeAndDontSendDataToOpenGl(Chunk *left, Chunk *right, Chunk *front, Chunk *back,
 		Chunk *frontLeft, Chunk *frontRight, Chunk *backLeft, Chunk *backRight,
 		glm::ivec3 playerPosition,
 		std::vector<TransparentCandidate> &transparentCandidates,

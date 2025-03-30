@@ -48,7 +48,6 @@ int GoblinClient::getTextureIndex()
 	return ModelsManager::TexturesLoaded::GoblinTexture;
 }
 
-
 void GoblinServer::appendDataToDisk(std::ofstream &f, std::uint64_t eId)
 {
 }
@@ -58,12 +57,16 @@ bool GoblinServer::update(float deltaTime, decltype(chunkGetterSignature) *chunk
 	ServerChunkStorer &serverChunkStorer, std::minstd_rand &rng, std::uint64_t yourEID,
 	std::unordered_set<std::uint64_t> &othersDeleted,
 	std::unordered_map<std::uint64_t, std::unordered_map<glm::ivec3, PathFindingNode>> &pathFindingSurvival,
-	std::unordered_map<std::uint64_t, glm::dvec3> &playersPositionSurvival
+	std::unordered_map<std::uint64_t, glm::dvec3> &playersPositionSurvival,
+	std::unordered_map < std::uint64_t, Client *> &allClients
 )
 {
+	BasicEnemyBehaviourOtherSettings settings;
+	settings.hearBonus = -0.1;
+
 
 	basicEnemyBehaviour.update(this, deltaTime, chunkGetter, serverChunkStorer, rng, yourEID, othersDeleted,
-		pathFindingSurvival, playersPositionSurvival, getPosition(), {});
+		pathFindingSurvival, playersPositionSurvival, getPosition(), allClients, settings);
 
 
 	/*
@@ -476,5 +479,23 @@ bool GoblinServer::update(float deltaTime, decltype(chunkGetterSignature) *chunk
 
 
 	return true;
+}
+
+WeaponStats GoblinServer::getWeaponStats()
+{
+	WeaponStats weaponStats;
+
+	//basic goblin
+	weaponStats.damage = 20;
+	weaponStats.critDamage = 30;
+	weaponStats.surprizeDamage = 30;
+	weaponStats.critChance = 0.1;
+	weaponStats.speed = 1;
+	weaponStats.armourPenetration = 1;
+	weaponStats.accuracy = 0.8; //accuracy is used for enemies to determine how corectly they hit
+	weaponStats.range = 1.5;
+	weaponStats.knockBack = 3;
+
+	return weaponStats;
 }
 

@@ -1368,6 +1368,7 @@ unsigned int cubeEntityIndices[] = {
 8,   9, 10,  8, 10, 11, // Right
 };
 
+float &getHitLensDirt();
 
 void Renderer::recreateBlocksTexturesBuffer(BlocksLoader &blocksLoader)
 {
@@ -2223,6 +2224,7 @@ void Renderer::reloadShaders()
 		RESOURCES_PATH "shaders/postProcess/applyBloomData.frag");
 	applyBloomDataShader.shader.bind();
 	GET_UNIFORM2(applyBloomDataShader, u_waterDropsPower);
+	GET_UNIFORM2(applyBloomDataShader, u_hitIntensity);
 	GET_UNIFORM2(applyBloomDataShader, u_SSGR);
 	
 
@@ -2261,6 +2263,18 @@ void Renderer::reloadShaders()
 		GET_UNIFORM2(renderUIBlocksShader, u_viewProjection);
 		GET_UNIFORM2(renderUIBlocksShader, u_useOneTexture);
 		
+	}
+#pragma endregion
+
+#pragma region fxaa
+	{
+		fxaaShader.shader.clear();
+		fxaaShader.shader.loadShaderProgramFromFile(RESOURCES_PATH "shaders/postProcess/drawQuads.vert",
+			RESOURCES_PATH "shaders/postProcess/fxaa.frag");
+
+		GET_UNIFORM2(fxaaShader, u_texture);
+
+
 	}
 #pragma endregion
 
@@ -2536,9 +2550,11 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 		{
 			programData.renderer.renderShadow(sunShadow,
 				chunkSystem, c, programData, mainLightPosition);
+
+			glBindVertexArray(vaoQuad);
+			sunShadow.renderShadowIntoTexture(c);
 		}
 
-		sunShadow.renderShadowIntoTexture(c);
 	}
 
 
@@ -2738,7 +2754,6 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 	}
 
 	
-
 #pragma region frustum culling and sorting
 
 	//chunk vector copy has only valid non culled chunks!
@@ -3738,10 +3753,10 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 		glUniform1f(filterBloomDataShader.u_exposure, defaultShader.shadingSettings.exposure);
 
 		float finalTresshold = getShadingSettings().bloomTresshold / 100.f;
-		finalTresshold *= linearRemap(pow(adaptiveExposure.getLuminosityOrDefaultValueIfDisabeled(), 2.2), 0, 1, 0.8, 2);
+		finalTresshold *= linearRemap(pow(adaptiveExposure.getLuminosityOrDefaultValueIfDisabeled(), 2.2), 0, 1, 0.8, 1.8);
 
 		float finalMultiplier = getShadingSettings().bloomMultiplier * (2.f/5.f);
-		finalMultiplier *= linearRemap(pow(adaptiveExposure.getLuminosityOrDefaultValueIfDisabeled(), 2.0), 0, 1, 1.2, 0.4);
+		finalMultiplier *= linearRemap(pow(adaptiveExposure.getLuminosityOrDefaultValueIfDisabeled(), 2.0), 0, 1, 1.2, 0.6);
 
 
 		if (underWater)
@@ -3961,7 +3976,7 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 	};
 
 	GLuint currentTexture = 0;
-
+	FBO *secondaryFBO = 0;
 
 	//bloom
 	if(getShadingSettings().bloom && getShadingSettings().bloomMultiplier > 0)
@@ -3980,8 +3995,10 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, programData.lensDirtTexture.id);
 
+		//hit lens dirt hitlensdirt
 		glActiveTexture(GL_TEXTURE2);
 		glBindTexture(GL_TEXTURE_2D, programData.hitDirtTexture.id);
+		glUniform1f(applyBloomDataShader.u_hitIntensity, getHitLensDirt());
 
 
 		glActiveTexture(GL_TEXTURE3);
@@ -4023,7 +4040,7 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 		//glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		glBindFramebuffer(GL_FRAMEBUFFER, fboCoppy.fbo);
 		currentTexture = fboCoppy.color;
-
+		secondaryFBO = &fboMain;
 
 		warpShader.shader.bind();
 
@@ -4051,9 +4068,10 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 	else
 	{
 		currentTexture = fboMain.color;
+		secondaryFBO = &fboCoppy;
 		//copyToMainFbo();
 	}
-
+	fboMain.copyDepthToMainFbo(fboMain.size.x, fboMain.size.y);
 
 	//tone mapping
 	{
@@ -4065,7 +4083,14 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 		glDisable(GL_BLEND);
 		glDisable(GL_DEPTH_TEST);
 
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		if (getShadingSettings().FXAA)
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, secondaryFBO->fbo);
+		}
+		else
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		}
 
 
 		applyToneMapper.shader.bind();
@@ -4091,14 +4116,7 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 
 		glUniform3f(applyToneMapper.u_lift, lift.x, lift.y, lift.z);
 		glUniform3f(applyToneMapper.u_gain, gain.x, gain.y, gain.z);
-
 			
-			
-			
-			
-
-
-
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
 		copyToMainFboOnlyLastFrameStuff();
@@ -4107,7 +4125,26 @@ void Renderer::renderFromBakedData(SunShadow &sunShadow, ChunkSystem &chunkSyste
 
 	}
 
-	fboMain.copyDepthToMainFbo(fboMain.size.x, fboMain.size.y);
+	//fxaa
+	if(getShadingSettings().FXAA)
+	{
+		glBindVertexArray(vaoQuad);
+		
+		glDisable(GL_BLEND);
+		glDisable(GL_DEPTH_TEST);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	
+		fxaaShader.shader.bind();
+	
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, secondaryFBO->color);
+		glUniform1i(fxaaShader.u_texture, 0);
+	
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	}
+
+	//secondaryFBO->copyDepthAndColorToMainFbo(fboMain.size.x, fboMain.size.y);
+
 
 #pragma endregion
 
@@ -4482,10 +4519,16 @@ void Renderer::renderEntities(
 			//handItemMatrix = glm::translate(glm::vec3{0,0,2});
 
 			PerEntityData data = {};
-			data.textureId0 = currentSkinBindlessTexture;
-			data.textureId1 = currentSkinBindlessTexture;
-			data.textureId2 = currentSkinBindlessTexture;
-			data.textureId3 = currentSkinBindlessTexture;
+			//data.textureId1 = currentSkinBindlessTexture;
+			//data.textureId0 = currentSkinBindlessTexture;
+			//data.textureId2 = currentSkinBindlessTexture;
+			//data.textureId3 = currentSkinBindlessTexture;
+
+			data.textureId0 = modelsManager.temporaryPlayerHandBindlessTexture;
+			data.textureId1 = modelsManager.temporaryPlayerHandBindlessTexture;
+			data.textureId2 = modelsManager.temporaryPlayerHandBindlessTexture;
+			data.textureId3 = modelsManager.temporaryPlayerHandBindlessTexture;
+
 
 			glm::dvec3 position = glm::dvec3(posInt) + glm::dvec3(posFloat);
 
@@ -4531,7 +4574,27 @@ void Renderer::renderEntities(
 		{
 			PerEntityData data = {};
 
-			auto rotMatrix = e.second.getBodyRotationMatrix();
+			glm::mat4 rotMatrix(1.f);
+
+			if constexpr (hasPositionBasedID<decltype(e.second.entityBuffered)>)
+			{
+				std::uint64_t entityID = e.first;
+				auto blockPos = fromEntityIDToBlockPos(entityID);
+
+				Block *b = chunkSystem.getBlockSafe(blockPos.x, blockPos.y, blockPos.z);
+
+				if (b)
+				{
+					int rotation = b->getRotationFor365RotationTypeBlocks();
+					rotMatrix = glm::rotate(glm::radians(90.f * rotation), glm::vec3(0, 1, 0));
+				}
+
+			}
+			else
+			{
+				rotMatrix = e.second.getBodyRotationMatrix();
+			}
+
 
 			if constexpr (hasCanBeKilled<decltype(e.second.entityBuffered)>)
 			{
@@ -4605,7 +4668,22 @@ void Renderer::renderEntities(
 			//	data.textureId = modelsManager.gpuIds[e.second.getTextureIndex()];
 			//}
 
-			decomposePosition(e.second.getRubberBandPosition(), data.entityPositionFloat, data.entityPositionInt);
+
+			if constexpr (hasPositionBasedID<decltype(e.second.entityBuffered)>)
+			{
+				std::uint64_t entityID = e.first;
+				auto blockPos = fromEntityIDToBlockPos(entityID);
+
+				data.entityPositionFloat = {0,-0.5,0};
+				data.entityPositionInt = blockPos;
+			}
+			else
+			{
+				decomposePosition(e.second.getRubberBandPosition(), data.entityPositionFloat, data.entityPositionInt);
+			}
+
+			
+			
 			entityData.push_back(data);
 		}
 
@@ -4632,6 +4710,7 @@ void Renderer::renderEntities(
 	renderAllEntitiesOfOneType(modelsManager.pig, entityManager.pigs);
 	renderAllEntitiesOfOneType(modelsManager.cat, entityManager.cats);
 	renderAllEntitiesOfOneType(modelsManager.goblin, entityManager.goblins);
+	renderAllEntitiesOfOneType(modelsManager.trainingDummy, entityManager.trainingDummy);
 
 
 	glBindVertexArray(0);
@@ -5222,56 +5301,161 @@ void Renderer::renderShadow(SunShadow &sunShadow,
 	glBindFramebuffer(GL_FRAMEBUFFER, sunShadow.shadowMap.fbo);
 	glClear(GL_DEPTH_BUFFER_BIT);
 
+	glm::vec3 posFloat = {};
 
-	glm::ivec3 newPos = c.position;
+#pragma region shadow ortographic projection calculation
 
 	{
-		//newPos.y = 120;
-		newPos.y += 60;
+		//https://github.com/maritim/LiteEngine/blob/8e165cb06e1dccf378cde0e34f17668e6d08c15b/Engine/RenderPasses/ShadowMap/DirectionalLightShadowMapRenderPass.cpp#L227
 
-		glm::vec3 moveDir = sunPos;
+		glm::dvec3 cuboidExtendsMin = glm::dvec3(std::numeric_limits<double>::max());
+		glm::dvec3 cuboidExtendsMax = glm::dvec3(-std::numeric_limits<double>::min());
 
-		float l = glm::length(moveDir);
-		if (l > 0.0001)
+		//float zStart = index == 0 ? -1 : _volume->GetCameraLimit(index - 1);
+		//float zEnd = _volume->GetCameraLimit(index);
+
+		static float zStart = -1;		//-1
+		static float zEnd = 1;			// 1
+		static float cameraDist = 200.f;
+
+		ImGui::Begin("Test");
+		ImGui::SliderFloat("zStart", &zStart, -1, 1);
+		ImGui::SliderFloat("zEnd", &zEnd, -1, 1);
+		ImGui::SliderFloat("cameraDist", &cameraDist, 1, 400);
+		ImGui::End();
+
+		auto lastFarPlane = c.farPlane;
+		c.farPlane = cameraDist;
+
+
+		glm::vec3 playerFloat = {};
+		glm::ivec3 playerInt = {};
+		decomposePosition(c.position, playerFloat, playerInt);
+
+		auto cameraProjView = c.getViewProjectionWithPositionMatrixDouble();
+		glm::dmat4 invCameraProjView = glm::inverse(cameraProjView);
+
+		glm::vec3 referenceDir(0, 0, 1); // Default forward direction
+		glm::dquat lightRotation = glm::rotation(referenceDir, sunPos);
+		lightRotation = glm::conjugate(lightRotation);
+
+
+		c.farPlane = lastFarPlane;
+
+
+		for (int x = -1; x <= 1; x += 2)
 		{
-			moveDir /= l;
-			newPos += moveDir * (float)CHUNK_SIZE * 12.f;
+			for (int y = -1; y <= 1; y += 2)
+			{
+				for (int z = -1; z <= 1; z += 2)
+				{
+					glm::dvec4 cuboidCorner = glm::dvec4(x, y, z == -1 ? zStart : zEnd, 1.0f);
+
+					cuboidCorner = invCameraProjView * cuboidCorner;
+					cuboidCorner /= cuboidCorner.w;
+
+					//cuboidCorner.z *= -1;
+
+					cuboidCorner = glm::dvec4(lightRotation * glm::dvec3(cuboidCorner), 0.0f);
+
+					cuboidExtendsMin.x = std::min(cuboidExtendsMin.x, cuboidCorner.x);
+					cuboidExtendsMin.y = std::min(cuboidExtendsMin.y, cuboidCorner.y);
+					cuboidExtendsMin.z = std::min(cuboidExtendsMin.z, cuboidCorner.z);
+
+					cuboidExtendsMax.x = std::max(cuboidExtendsMax.x, cuboidCorner.x);
+					cuboidExtendsMax.y = std::max(cuboidExtendsMax.y, cuboidCorner.y);
+					cuboidExtendsMax.z = std::max(cuboidExtendsMax.z, cuboidCorner.z);
+				}
+			}
 		}
+
+
+		double near_plane = 0.1f, far_plane = 460.f;
+
+		std::cout << cuboidExtendsMin.x << " " << cuboidExtendsMax.x << " | " <<
+			cuboidExtendsMin.y << " " << cuboidExtendsMax.y << " | " <<
+			cuboidExtendsMin.z << " " << cuboidExtendsMax.z << "\n";
+
+		//cuboidExtendsMin.z = 0;
+		//cuboidExtendsMax.z = 0;
+
+		glm::dmat4 lightProjection = glm::ortho(cuboidExtendsMin.x, cuboidExtendsMax.x,
+			cuboidExtendsMin.y, cuboidExtendsMax.y,
+			cuboidExtendsMin.z, cuboidExtendsMax.z + far_plane);
+
+		//auto mvp = lightProjection * lookAtSafe({},
+		//	glm::dvec3(sunPos), glm::dvec3(0, 1, 0));
+
+		auto mvp = lightProjection * glm::mat4_cast(lightRotation);
+
+		//glm::mat4 mvp = getLightMatrix(sunPos, c);
+
+
+		//auto mat = calculateLightProjectionMatrix(c, -skyBoxRenderer.sunPos, 1, 260, 25);
+
+		sunShadow.lightSpaceMatrix = mvp;
+		sunShadow.lightSpacePosition = glm::vec3(0); //todo
+
 	}
 
-	//glm::vec3 posFloat = {};
-	//glm::ivec3 posInt = {};
-	//c.decomposePosition(posFloat, posInt);
+	//old version
+	if(0)
+	{
+		glm::ivec3 newPos = c.position;
 
-	glm::vec3 posFloat = {};
-	glm::ivec3 posInt = newPos;
-	
-	glm::ivec3 playerPos = c.position;
+		{
+			//newPos.y = 120;
+			//newPos.y += 60;
+			newPos.y += 120;
 
-	glm::vec3 vectorToPlayer = glm::normalize(glm::vec3(playerPos - newPos));
+			glm::vec3 moveDir = sunPos;
 
-	//posInt += glm::vec3(0, 0, 10);
+			float l = glm::length(moveDir);
+			if (l > 0.0001)
+			{
+				moveDir /= l;
+				newPos += moveDir * (float)CHUNK_SIZE * 12.f;
+			}
+		}
 
-	float projectSize = 60;
+		//glm::vec3 posFloat = {};
+		//glm::ivec3 posInt = {};
+		//c.decomposePosition(posFloat, posInt);
 
-	float near_plane = 1.0f, far_plane = 460.f;
-	glm::mat4 lightProjection = glm::ortho(-projectSize, projectSize, -projectSize, projectSize,
-		near_plane,		far_plane);
-	//auto mvp = lightProjection * glm::lookAt({},
-	//	-skyBoxRenderer.sunPos, glm::vec3(0, 1, 0));
-	auto mvp = lightProjection * lookAtSafe({},
-		vectorToPlayer, glm::vec3(0, 1, 0));
+		glm::ivec3 posInt = newPos;
 
-	//glm::mat4 mvp = getLightMatrix(sunPos, c);
-	
+		glm::ivec3 playerPos = c.position;
 
-	//auto mat = calculateLightProjectionMatrix(c, -skyBoxRenderer.sunPos, 1, 260, 25);
+		glm::vec3 vectorToPlayer = glm::normalize(glm::vec3(playerPos - newPos));
 
-	sunShadow.lightSpaceMatrix = mvp;
-	sunShadow.lightSpacePosition = posInt;
-	
-	//sunShadow.lightSpaceMatrix = mat;
-	//sunShadow.lightSpacePosition = {};
+		//posInt += glm::vec3(0, 0, 10);
+
+		float projectSize = 60;
+
+		float near_plane = 1.0f, far_plane = 460.f;
+		glm::mat4 lightProjection = glm::ortho(-projectSize, projectSize, -projectSize, projectSize,
+			near_plane, far_plane);
+		//auto mvp = lightProjection * glm::lookAt({},
+		//	-skyBoxRenderer.sunPos, glm::vec3(0, 1, 0));
+		auto mvp = lightProjection * lookAtSafe({},
+			vectorToPlayer, glm::vec3(0, 1, 0));
+
+		//glm::mat4 mvp = getLightMatrix(sunPos, c);
+
+
+		//auto mat = calculateLightProjectionMatrix(c, -skyBoxRenderer.sunPos, 1, 260, 25);
+
+		sunShadow.lightSpaceMatrix = mvp;
+		sunShadow.lightSpacePosition = posInt;
+
+		//sunShadow.lightSpaceMatrix = mat;
+		//sunShadow.lightSpacePosition = {};
+
+
+	}
+#pragma endregion
+
+
 
 #pragma region setup uniforms and stuff
 	{
@@ -5373,9 +5557,18 @@ void GyzmosRenderer::create()
 	glCreateBuffers(1, &blockPositionBuffer);
 	glBindBuffer(GL_ARRAY_BUFFER, blockPositionBuffer);
 	glBufferData(GL_ARRAY_BUFFER, 0, 0, GL_STREAM_DRAW);
-	glVertexAttribIPointer(1, 3, GL_INT, 0, 0);
+	glVertexAttribIPointer(1, 3, GL_INT, sizeof(float) * 12, 0);
 	glEnableVertexAttribArray(1);
 	glVertexAttribDivisor(1, 1);
+
+	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 12, (void*)(sizeof(float) * 4));
+	glEnableVertexAttribArray(2);
+	glVertexAttribDivisor(2, 1);
+
+	glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 12, (void *)(sizeof(float) * 8));
+	glEnableVertexAttribArray(3);
+	glVertexAttribDivisor(3, 1);
+
 
 	glCreateBuffers(1, &cubeIndices);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cubeIndices);
@@ -5915,6 +6108,11 @@ void Renderer::FBO::copyDepthToMainFbo(int w, int h)
 	);
 }
 
+void Renderer::FBO::copyDepthAndColorToMainFbo(int w, int h)
+{
+	writeAllToOtherFbo(0, w, h);
+}
+
 void Renderer::FBO::copyDepthFromOtherFBO(GLuint other, int w, int h)
 {
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -6114,3 +6312,4 @@ float AdaptiveExposure::getLuminosityOrDefaultValueIfDisabeled()
 {
 	return currentLuminosity;
 }
+

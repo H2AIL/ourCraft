@@ -110,7 +110,8 @@ bool genericCallUpdateForEntity(T &e,
 	ServerChunkStorer &chunkCache, std::minstd_rand &rng, 
 	std::unordered_set<std::uint64_t> &othersDeleted,
 	std::unordered_map<std::uint64_t, std::unordered_map<glm::ivec3, PathFindingNode>> &pathFinding,
-	std::unordered_map<std::uint64_t, glm::dvec3> &playersPositionSurvival
+	std::unordered_map<std::uint64_t, glm::dvec3> &playersPositionSurvival,
+	std::unordered_map < std::uint64_t, Client *> &allClients
 	)
 {
 	float time = deltaTime;
@@ -124,7 +125,34 @@ bool genericCallUpdateForEntity(T &e,
 	{
 		//todo pack things into a struct
 		rez = e.second.update(time, chunkGetter, chunkCache, rng, e.first,
-			othersDeleted, pathFinding, playersPositionSurvival);
+			othersDeleted, pathFinding, playersPositionSurvival, allClients);
+	}
+
+
+	if constexpr (hasLookDirectionAnimation<decltype(e.second.entity)>)
+	{
+		//e.second.entity.lookDirectionAnimation = e.second.wantToLookDirection;
+		//e.second.entity.lookDirectionAnimation = {0,0,-1};
+		//e.second.entity.bodyOrientation = {0,-1};
+		glm::vec3 finalVector = orientVectorTowards(e.second.entity.getLookDirection(), 
+			e.second.wantToLookDirection, deltaTime * glm::radians(180.f));
+		//finalVector = e.second.wantToLookDirection;
+		
+		//glm::vec3 finalVector = orientVectorTowards(e.second.entity.lookDirectionAnimation, e.second.wantToLookDirection, deltaTime * glm::radians(70.f));
+
+		if (glm::dot(glm::vec2(finalVector.x, finalVector.z), e.second.entity.bodyOrientation) > 0.5f)
+		{
+			lookAtDirection(finalVector, e.second.entity.lookDirectionAnimation,
+				 e.second.entity.bodyOrientation,
+				glm::radians(65.f));
+		}
+		else
+		{
+			lookAtDirectionWithBodyOrientation(finalVector, e.second.entity.lookDirectionAnimation,
+				e.second.entity.bodyOrientation,
+				glm::radians(65.f));
+		}
+
 	}
 
 	if constexpr (hasRestantTimer<decltype(e.second)>)
@@ -178,7 +206,7 @@ void callGenericResetEntitiesInTheirNewChunk(std::integer_sequence<int, Is...>, 
 
 bool spawnDroppedItemEntity(
 	ServerChunkStorer &chunkManager, WorldSaver &worldSaver,
-	unsigned char counter, unsigned short type,
+	unsigned short counter, unsigned short type,
 	std::vector<unsigned char> *metaData, glm::dvec3 pos, MotionState motionState = {},
 	std::uint64_t newId = 0,
 	float restantTimer = 0, float dontPickUpTimer = 1)
@@ -282,6 +310,7 @@ bool spawnGoblin(
 {
 	//todo also send packets
 	//todo generic spawn for any entity
+
 
 	auto chunkPos = determineChunkThatIsEntityIn(goblin.position);
 	auto c = chunkManager.getChunkOrGetNull(chunkPos.x, chunkPos.y);
@@ -503,8 +532,6 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 			{
 
 				bool wasGenerated = 0;
-				//std::cout << "server recieved place block\n";
-				//auto chunk = sd.chunkCache.getOrCreateChunk(i.t.pos.x / 16, i.t.pos.z / 16);
 				auto chunk = chunkCache.getChunkOrGetNull(divideChunk(i.t.pos.x), divideChunk(i.t.pos.z));
 				int convertedX = modBlockToChunk(i.t.pos.x);
 				int convertedZ = modBlockToChunk(i.t.pos.z);
@@ -576,8 +603,6 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 					)
 				{
 
-					//std::cout << "server recieved place block\n";
-					//auto chunk = sd.chunkCache.getOrCreateChunk(i.t.pos.x / 16, i.t.pos.z / 16);
 					auto chunk = chunkCache.getChunkOrGetNull(divideChunk(i.t.pos.x), divideChunk(i.t.pos.z));
 					int convertedX = modBlockToChunk(i.t.pos.x);
 					int convertedZ = modBlockToChunk(i.t.pos.z);
@@ -908,11 +933,11 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 						}
 						else
 						{
-							std::cout << "Server revision : "
-								<< (int)client->playerData.inventory.revisionNumber << "\n";
-
-							std::cout << "Recieved revision : "
-								<< (int)i.t.revisionNumber << "\n";
+							//std::cout << "Server revision : "
+							//	<< (int)client->playerData.inventory.revisionNumber << "\n";
+							//
+							//std::cout << "Recieved revision : "
+							//	<< (int)i.t.revisionNumber << "\n";
 
 							killItem = true;
 						}
@@ -1411,8 +1436,6 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 							if (allows)
 							{
 								bool wasGenerated = 0;
-								//std::cout << "server recieved place block\n";
-								//auto chunk = sd.chunkCache.getOrCreateChunk(i.t.pos.x / 16, i.t.pos.z / 16);
 								auto chunk = chunkCache.getChunkOrGetNull(divideChunk(i.t.pos.x), divideChunk(i.t.pos.z));
 								int convertedX = modBlockToChunk(i.t.pos.x);
 								int convertedZ = modBlockToChunk(i.t.pos.z);
@@ -1511,33 +1534,69 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 
 								if (!doNotHit)
 								{
-									std::uint64_t wasKilled = 0;
-									bool rez = chunkCache.hitEntityByPlayer(entityId, client->playerData.getPosition(),
-										*item, wasKilled, dir, rng, hitResult.hitCorectness, hitResult.bonusCritChance);
+									bool specialCase = 0;
 
-									//todo  we have separate logic for killing players and
-									//	maybe do the same for entities?
-									if (wasKilled)
+									if (type == EntityType::trainingDummy)
+									{
+										//std::cout << "<Recieved hit!> ";
+
+										glm::ivec3 pos = fromEntityIDToBlockPos(entityId);
+
+										Block *b = chunkCache.getBlockSafe(pos);
+
+										if (b && b->getType() == BlockTypes::trainingDummy)
+										{
+											//std::cout << "<Validated hit!!> ";
+
+											Packet packet;
+											packet.cid = i.cid;
+											packet.header = headerTrainingDummyGotAttacked;
+
+											Packet_TrainingDummyGotAttacked packetData;
+											packetData.entityID = entityId;
+											packetData.timer = getTimer();
+											packetData.attackStrength = 3.f;
+
+											broadCastNotLocked(packet, &packetData, sizeof(packetData),
+												false, true, channelOtherVisualThings);
+
+										}
+
+										specialCase = true;
+									}
+
+									//some entities like training dummies are treated differently!
+									if (!specialCase)
 									{
 
-										//sd.chunkCache
+										std::uint64_t wasKilled = 0;
+										bool rez = chunkCache.hitEntityByPlayer(entityId, client->playerData.getPosition(),
+											*item, wasKilled, dir, rng, hitResult.hitCorectness, hitResult.bonusCritChance);
 
-										auto pos = chunkCache.getEntityPosition(wasKilled);
-
-										if (pos)
+										//todo  we have separate logic for killing players and
+										//	maybe do the same for entities?
+										if (wasKilled)
 										{
-											glm::vec3 p = *pos;
-											p.y += 0.5;
-											spawnDroppedItemEntity(chunkCache,
-												worldSaver, 1, ItemTypes::apple, 0, p, {}, {}, 0, 0);
-										}
-										else
-										{
-											std::cout << "ERROR gettint entity position!\n";
-										}
 
-										killEntity(worldSaver, wasKilled, chunkCache);
-									}
+											//sd.chunkCache
+
+											auto pos = chunkCache.getEntityPosition(wasKilled);
+
+											if (pos)
+											{
+												glm::vec3 p = *pos;
+												p.y += 0.5;
+												spawnDroppedItemEntity(chunkCache,
+													worldSaver, 1, ItemTypes::apple, 0, p, {}, {}, 0, 0);
+											}
+											else
+											{
+												std::cout << "ERROR gettint entity position!\n";
+											}
+
+											killEntity(worldSaver, wasKilled, chunkCache);
+										}
+									}//special case
 								}
 
 
@@ -1923,6 +1982,8 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 		playersPositionSurvival.insert({p.first, p.second->playerData.getPosition()});
 	}
 
+
+
 	//for (auto &c : chunkCache.savedChunks)
 	//{
 	//	for (auto &p : c.second->entityData.players)
@@ -2156,7 +2217,7 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 					
 					bool rez = genericCallUpdateForEntity(e, deltaTime, chunkGetter,
 						chunkCache, rng, othersDeleted,
-						pathFindingSurvivalClients, playersPositionSurvival);
+						pathFindingSurvivalClients, playersPositionSurvival, allClients);
 					glm::ivec2 newChunk = determineChunkThatIsEntityIn(e.second.getPosition());
 
 					if (!rez)
@@ -2165,7 +2226,7 @@ void doGameTick(float deltaTime, int deltaTimeMs, std::uint64_t currentTimer,
 						genericBroadcastEntityDeleteFromServerToPlayer(it->first,
 							true, allClients, e.second.lastChunkPositionWhenAnUpdateWasSent);
 
-						std::cout << "remove!!!!!!!\n";
+						//std::cout << "remove!!!!!!!\n";
 						//remove entity
 						it = container.erase(it);
 					}

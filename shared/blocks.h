@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <glad/glad.h>
 #include <glm/vec3.hpp>
+constexpr static float BLOCK_DEFAULT_FRICTION = 8.f;
 
 enum BlockTypes : unsigned short
 {
@@ -236,6 +237,11 @@ enum BlockTypes : unsigned short
 	mossyCobblestone_wall,
 
 	cobweb,
+
+	hayBalde,
+	trainingDummy,
+	target,
+
 	BlocksCount
 };
 
@@ -354,12 +360,41 @@ struct BlockCollider
 	glm::vec3 offset = {};
 };
 
+namespace BlockColor
+{
+	enum
+	{
+		none,
+		white,
+		lightGray,
+		darkGrayP,
+		black,
+		brown,
+		red,
+		orange,
+		yellow,
+		lime,
+		green,
+		turqoise,
+		cyan,
+		blue,
+		purple,
+		magenta,
+		pink,
+	};
+};
 
 struct Block
 {
 	BlockType typeAndFlags = 0;
 	unsigned char lightLevel = 0; //first 4 bytes represent the sun level and bottom 4 bytes the other lights level
 	unsigned char colorAndOtherFlags = 0;
+
+	bool operator==(const Block &other)
+	{
+		return typeAndFlags == other.typeAndFlags && lightLevel == other.lightLevel &&
+			colorAndOtherFlags == other.colorAndOtherFlags;
+	};
 
 	unsigned short getColor()
 	{
@@ -379,7 +414,6 @@ struct Block
 	{
 		return typeAndFlags & 0b0111'1111'1111;
 	}
-
 	unsigned char getFlagsBytes()
 	{
 		return typeAndFlags >> 11;
@@ -420,6 +454,32 @@ struct Block
 		typeAndFlags |= topPart;
 	}
 
+	void rotate(int rotation)
+	{
+		if(rotation == 0)
+		{
+			return;
+		}
+
+		assert(rotation <= 3);
+		
+		if (hasRotationFor365RotationTypeBlocks())
+		{
+
+			if (!isWallMountedOrStangingBlock()
+				||
+				getRotatedOrStandingForWallOrStandingBlocks()
+				)
+			{
+				int r = getRotationFor365RotationTypeBlocks();
+
+				setRotationFor365RotationTypeBlocks((r + rotation) % 4);
+			}
+
+		}
+
+	}
+
 	bool getTopPartForSlabs()
 	{
 		return (typeAndFlags >> 11) & 0b0000'1;
@@ -431,7 +491,7 @@ struct Block
 		return ::isDecorativeFurniture(getType());
 	}
 
-	//used for stairs, or furnace type blocks
+	//used for stairs, or furniture type blocks
 	bool hasRotationFor365RotationTypeBlocks()
 	{
 		return isStairsMesh() || isWallMesh() || isDecorativeFurniture() || isWallMountedBlock()
@@ -533,6 +593,23 @@ struct Block
 				return b;
 			}
 		}
+
+		auto type = getType();
+
+		auto sizeInPixels = [&](float pixels)
+		{
+			return (pixels / 16.f);
+		};
+
+		if (type == BlockTypes::trainingDummy)
+		{
+			BlockCollider b{};
+			b.size.x = sizeInPixels(14);
+			b.size.z = b.size.x;
+			b.size.y = sizeInPixels(1);
+			return b;
+		}
+
 
 		return BlockCollider{};
 	}

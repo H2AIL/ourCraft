@@ -2,6 +2,7 @@
 #include <blocks.h>
 #include <vector>
 #include <string>
+#include <cstring>
 #include <gameplay/weaponStats.h>
 
 constexpr static unsigned short ItemsStartPoint = 2'048;
@@ -65,12 +66,12 @@ const char *getItemTextureName(int itemId);
 struct Item
 {
 	Item() {}; //todo maybe remove, it is dangerous, use item creator, or just don't add metadata by default
-	Item(unsigned short type, unsigned char counter = 1):type(type), counter(counter) {};
+	Item(unsigned short type, unsigned short counter = 1):type(type), counter(counter) {};
 
 
 	std::vector<unsigned char> metaData;
 	unsigned short type = 0;
-	unsigned char counter = 1;
+	unsigned short counter = 1;
 
 	bool isBlock();
 
@@ -88,7 +89,7 @@ struct Item
 
 	void sanitize();
 
-	unsigned char getStackSize();
+	unsigned short getStackSize();
 
 	bool isTool();
 
@@ -134,7 +135,7 @@ bool isItem(unsigned short type);
 //check if you can put from on top of to completely and does it
 bool canItemBeMovedToAndMoveIt(Item &from, Item &to);
 
-Item itemCreator(unsigned short type, unsigned char counter = 1);
+Item itemCreator(unsigned short type, unsigned short counter = 1);
 
 float computeMineDurationTime(BlockType type, Item &item);
 
@@ -165,4 +166,5 @@ struct PlayerInventory
 	int tryPickupItem(const Item &item);
 
 	unsigned char revisionNumber = 0;
+
 };

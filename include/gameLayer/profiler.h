@@ -4,6 +4,7 @@
 #include <deque>
 #include <string>
 #include <vector>
+#include <cstring>
 
 
 struct GPUProfiler
@@ -62,8 +63,8 @@ struct Profiler
 
 	void endFrame();
 
-	void startSubProfile(char *c);
-	void endSubProfile(char *c);
+	void startSubProfile(const char *c);
+	void endSubProfile(const char *c);
 
 	void setSubProfileManually(char *c, PL::ProfileRezults rezults);
 

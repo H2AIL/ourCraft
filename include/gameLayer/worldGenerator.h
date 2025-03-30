@@ -22,6 +22,11 @@ enum
 	Structure_SpruceSlim,
 	Structure_SmallStone,
 	Structure_TallSlimTree,
+	Structure_AbandonedHouse,
+	Structure_GoblinTower,
+	Structure_AbandonedTrainingCamp,
+	Structure_StoneRuins,
+	Structure_MinesDungeon,
 };
 
 //used to report back
@@ -37,6 +42,16 @@ struct StructureToGenerate
 	bool addRandomTreeHeight = 0;
 	BlockType replaceLeavesWith = 0;
 	BlockType replaceLogWith = 0;
+	bool paintLogicStuff = true; //paints leaves and others
+	bool replaceEnclosedColumsWithAir = 0;
+	unsigned char replaceOverAnything = 0;
+	bool placeInCenter = false;
+
+	void setDefaultSmallBuildingSettings()
+	{
+		replaceOverAnything = 2;
+		replaceEnclosedColumsWithAir = true;
+	}
 };
 
 void generateChunk(Chunk &c, WorldGenerator &wg, StructuresManager &structuresManager, BiomesManager &biomesManager

@@ -1,14 +1,22 @@
 #pragma once
+
 #include <gameplay/entity.h>
 #include <gameplay/life.h>
 #include <random>
 #include <gameplay/ai.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <multyPlayer/doHittingThings.h>
+#include <multyPlayer/client.h>
+
 
 struct BasicEnemyBehaviourOtherSettings
 {
 
 	float searchForPlayerTimer = 1; //how much time will it take untill the entity searches for another target, (while it doesn't have a target)
 	float searchDistance = 40; //players that get to this close will start getting targeted
+	float hearBonus = 0.1;
+	float sightBonus = 0.1;
 
 };
 
@@ -20,6 +28,8 @@ struct BasicEnemyBehaviour
 	float waitTime = 1;
 	float keepJumpingTimer = 0;
 	std::uint64_t playerLockedOn = 0;
+	float worriedTimer = 0;
+	float hitTimer = 0; //when this reaches 0 the enemy can attack again once
 	
 	enum states
 	{
@@ -39,6 +49,7 @@ struct BasicEnemyBehaviour
 	struct
 	{
 		float changeDirectionTime = 1;
+		float changeLookDirectionTime = 0;
 	}stateWalkingRandomlyData;
 
 	struct
@@ -46,6 +57,48 @@ struct BasicEnemyBehaviour
 
 	}stateTargetedPlayerData;
 
+	bool isUnaware()
+	{
+		if (worriedTimer > 0) { return false; }
+
+		if (currentState == stateStaying || currentState == stateWalkingRandomly)
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	template<typename BaseEntity>
+	void signalHit(glm::vec3 direction, BaseEntity *baseEntity)
+	{
+		hitTimer = std::max(hitTimer, 0.5f);
+
+
+		if (currentState != stateTargetedPlayer)
+		{
+			worriedTimer = 60;
+
+			float len = glm::length(direction);
+			if (len > 0)
+			{
+				direction /= len;
+				baseEntity->wantToLookDirection = direction;
+			}
+
+			searchForPlayerTimer = 0;
+
+			if (currentState == stateStaying)
+			{
+				stateWalkingRandomlyData = {};
+				currentState = stateWalkingRandomly;
+				stateWalkingRandomlyData.changeDirectionTime = 0;
+			}
+
+		}
+	}
 
 	unsigned char currentState = stateStaying;
 	float searchForPlayerTimer = 1;
@@ -58,20 +111,82 @@ struct BasicEnemyBehaviour
 		std::unordered_set<std::uint64_t> &othersDeleted,
 		std::unordered_map<std::uint64_t, std::unordered_map<glm::ivec3, PathFindingNode>> &pathFindingSurvival,
 		std::unordered_map<std::uint64_t, glm::dvec3> &playersPositionSurvival, const glm::dvec3 currentPosition,
+		std::unordered_map < std::uint64_t, Client *> &allClients,
 		BasicEnemyBehaviourOtherSettings otherSettings)
 	{
 
-		glm::vec3 realLookDirection = normalize(computeLookDirection(baseEntity->entity.bodyOrientation,
-			baseEntity->entity.lookDirectionAnimation));
-		
+		worriedTimer -= deltaTime;
+		if (worriedTimer < 0) { worriedTimer = 0; }
+
+		hitTimer -= deltaTime;
+		if (hitTimer < 0) { hitTimer = 0; }
+
+		if (!playerLockedOn)
+		{
+			hitTimer = std::max(hitTimer, 0.5f);
+		}
+
+		glm::vec3 realLookDirection = baseEntity->entity.getLookDirection();
+
+		auto changeStateStaying = [&]()
+		{
+			stateStayingData = {};
+
+			if (worriedTimer)
+			{
+				stateStayingData.timerChangeLookDirection = stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 3)
+					+ getRandomNumberFloat(rng, 1, 2);
+			}
+			else
+			{
+				stateStayingData.timerChangeLookDirection = stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 10)
+					+ getRandomNumberFloat(rng, 1, 10);
+			}
+
+
+			currentState = stateStaying;
+		};
+
+		//used to look at things that grab atention, will add a random bias
+		auto manuallySetLookAtDirection = [&](glm::vec3 newLookDirection)
+		{
+			if (currentState == stateStaying || currentState == stateWalkingRandomly)
+			{
+
+				if (worriedTimer)
+				{
+					stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 2) + getRandomNumberFloat(rng, 1, 2);
+				}
+				else
+				{
+					stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 2, 3) + getRandomNumberFloat(rng, 1, 2);
+				}
+
+				stateWalkingRandomlyData.changeDirectionTime = stateStayingData.timerChangeLookDirection;
+			}
+
+			auto newLookDir = moveVectorRandomly(newLookDirection,
+				rng, glm::radians(20.f), glm::radians(10.f));
+
+			if (currentState == stateWalkingRandomly)
+			{
+				if (glm::dot(newLookDir, realLookDirection) < 0.8)
+				{
+					changeStateStaying();
+				}
+			}
+
+			baseEntity->wantToLookDirection = newLookDir;
+		};
+
 		auto searchForPlayerLogicIfNeeded = [&]()
 		{
 
 			if (playerLockedOn != 0) { return; }
 			if (playersPositionSurvival.empty()) { return; }
 
-			searchForPlayerTimer -= deltaTime;
-			if (searchForPlayerTimer < 0)
+			//searchForPlayerTimer -= deltaTime;
+			//if (searchForPlayerTimer < 0)
 			{
 
 				//todo temporary allocator
@@ -80,58 +195,137 @@ struct BasicEnemyBehaviour
 				for (auto &p : playersPositionSurvival) { searches.push_back(p.first); }
 				std::shuffle(searches.begin(), searches.end(), rng);
 
-				for (auto playerID :searches)
+				for (auto playerID : searches)
 				{
-					auto position = playersPositionSurvival[playerID];
-					
-					float distance = glm::distance(position, currentPosition);
+					auto positionPlayer = playersPositionSurvival[playerID];
+
+					float distance = glm::distance(positionPlayer, currentPosition);
 					if (distance <= otherSettings.searchDistance)
 					{
 						//this player is close enough
 
-						if (distance <= otherSettings.searchDistance / 10.f)
-						{
-							//instant target!
-							playerLockedOn = playerID;
-							break;
-						}
-						else
+						//if (distance <= otherSettings.searchDistance / 10.f)
+						//{
+						//	//instant target!
+						//	playerLockedOn = playerID;
+						//	break;
+						//}
+						//else
 						{
 							//percentage from approaching from begind
 							float percentage = distance;
-							percentage -= otherSettings.searchDistance / 10.f;
-							percentage /= (otherSettings.searchDistance * ( 9.f / 10.f));
+							//percentage -= otherSettings.searchDistance / 10.f;
+							//percentage /= (otherSettings.searchDistance * ( 9.f / 10.f));
+							percentage /= otherSettings.searchDistance;
+							float distancePercentage = percentage;
+
 							percentage = 1.f - glm::clamp(percentage, 0.f, 1.f);
+
 
 							//std::cout << "Distance Calculated: " << percentage << "; final percentage: " 
 							//	<< 100*pow(percentage, 4.f) << "%\n";
-							percentage = pow(percentage, 4.f);
+							percentage = pow(percentage, 3.f);
+							percentage += otherSettings.hearBonus;
+							if (worriedTimer) { percentage += 0.2; }
+							percentage = glm::clamp(percentage, 0.f, 1.f);
+
 
 							glm::vec3 lookDirection = realLookDirection;
-							glm::vec3 vectorToPlayer = normalize(position - currentPosition);
+							glm::vec3 vectorToPlayer = normalize(positionPlayer - currentPosition);
 
 							float viewFactor = glm::clamp(glm::dot(lookDirection, vectorToPlayer), 0.f, 1.f);
 							//std::cout << "viewFactor Calculated: " << viewFactor << "; final viewFactor: "
 							//	<< 100*pow(viewFactor, 8.f) << "%\n";
 							//std::cout << "vectorToPlayer: " << vectorToPlayer.x << " " << vectorToPlayer.y << " " << vectorToPlayer.z << "\n";
 							//std::cout << "lookDirection: " << lookDirection.x << " " << lookDirection.y << " " << lookDirection.z << "\n";
-							viewFactor = pow(viewFactor, 8.f);
+							viewFactor = pow(viewFactor, 4.f);
 
+							//if the enemy looks at least slightly towards the player we add the view factor
+							if (viewFactor > 0.1)
+							{
+								viewFactor += otherSettings.sightBonus;
+								if (worriedTimer) { viewFactor += 0.2; }
+							}
+
+							viewFactor = glm::clamp(viewFactor, 0.f, 1.f);
+
+							float finalPercentage = percentage;
 							//if we are close and the enemy looks directly at us we have a big chance of being targeted.
-							if (distance <= otherSettings.searchDistance / 1.5f)
+							//if (distance <= otherSettings.searchDistance / 1.5f)
+							//{
+							//	finalPercentage += viewFactor * 0.7;
+							//}
+							//else
+							//{
+							//	finalPercentage += viewFactor * 0.3;
+							//}
+
+							//finalPercentage = lerp(std::max(percentage, viewFactor),  percentage * viewFactor, 0.5f);
+							finalPercentage = viewFactor - (distancePercentage / 3.f); //if you are far it will have a contribution
+
+							//boost the chance of being seen if you are close and the enemy looks at you directly
+							if (viewFactor > 0.5 && percentage > 0.5)
 							{
-								percentage += viewFactor * 0.7;
-							}
-							else
-							{
-								percentage += viewFactor * 0.3;
+								finalPercentage += 0.2;
 							}
 
-							if (getRandomChance(rng, percentage))
+							//boost the chance even more if we are very close
+							if (percentage > 0.5 && viewFactor > 0.001)
 							{
+
+								finalPercentage += 0.1;
+
+								if (percentage > 0.8)
+								{
+									finalPercentage += 0.3;
+
+									if (percentage > 0.8)
+									{
+										finalPercentage += 0.3;
+
+										if (percentage > 0.9)
+										{
+											finalPercentage += 0.3;
+										}
+									}
+								}
+
+							}
+
+
+
+
+							//std::cout << "Dist perc: " << percentage << "  , view Perc: " << viewFactor <<  "  ,Final Percentage: " << finalPercentage << "\n";
+
+							//if(0)
+							//we have to do this because we check this probability 20 tiems per seccond
+							float probabilityAdjusted = 1.f - std::pow(1.f - finalPercentage, 1 / 20.f);
+							float probabilityAdjustedHear = 1.f - std::pow(1.f - percentage, 1 / 20.f);
+
+							if (probabilityAdjustedHear >= 0.99999 || getRandomChance(rng, probabilityAdjustedHear))
+							{
+								glm::vec3 newDir = positionPlayer - currentPosition;
+								float l = glm::length(baseEntity->wantToLookDirection);
+								if (l <= 0.000001)
+								{
+									newDir = {0,0,-1};
+								}
+								else
+								{
+									newDir /= l;
+								}
+
+								manuallySetLookAtDirection(newDir);
+							}
+
+							if (finalPercentage >= 0.99999 || getRandomChance(rng, probabilityAdjusted))
+							{
+								std::cout << "Locked!\n";
 								playerLockedOn = playerID;
 								break;
 							}
+
+
 						}
 
 					}
@@ -157,9 +351,20 @@ struct BasicEnemyBehaviour
 			}
 			else
 			{
-				lookAtPosition(found->second, baseEntity->entity.lookDirectionAnimation,
-					currentPosition, baseEntity->entity.bodyOrientation,
-					glm::radians(65.f));
+				baseEntity->wantToLookDirection = found->second - currentPosition;
+				float l = glm::length(baseEntity->wantToLookDirection);
+				if (l <= 0.000001)
+				{
+					baseEntity->wantToLookDirection = {0,0,-1};
+				}
+				else
+				{
+					baseEntity->wantToLookDirection /= l;
+				}
+
+				//lookAtPosition(found->second, baseEntity->entity.lookDirectionAnimation,
+				//	currentPosition, baseEntity->entity.bodyOrientation,
+				//	glm::radians(65.f));
 
 			}
 		};
@@ -170,45 +375,73 @@ struct BasicEnemyBehaviour
 			float up = getRandomNumberFloat(rng, -glm::radians(10.f), glm::radians(20.f));
 			glm::vec3 finalVector = glm::normalize(glm::vec3(direction.x, up, direction.y));
 
-			if (glm::dot(glm::vec2(finalVector.x, finalVector.z), baseEntity->entity.bodyOrientation) > 0.5f)
-			{
-				lookAtDirection(finalVector, baseEntity->entity.lookDirectionAnimation,
-					currentPosition, baseEntity->entity.bodyOrientation,
-					glm::radians(65.f));
-			}
-			else
-			{
-				lookAtDirectionWithBodyOrientation(finalVector, baseEntity->entity.lookDirectionAnimation,
-					currentPosition, baseEntity->entity.bodyOrientation,
-					glm::radians(65.f));
-			}
-	
-		};
+			baseEntity->wantToLookDirection = finalVector;
 
-		auto changeStateStaying = [&]()
-		{
-			stateStayingData = {};
-			stateStayingData.timerChangeLookDirection = stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 10)
-				+ getRandomNumberFloat(rng, 1, 10);
-			currentState = stateStaying;
+			//todo remove
+			//if (glm::dot(glm::vec2(finalVector.x, finalVector.z), baseEntity->entity.bodyOrientation) > 0.5f)
+			//{
+			//	lookAtDirection(finalVector, baseEntity->entity.lookDirectionAnimation,
+			//		 baseEntity->entity.bodyOrientation,
+			//		glm::radians(65.f));
+			//}
+			//else
+			//{
+			//	lookAtDirectionWithBodyOrientation(finalVector, baseEntity->entity.lookDirectionAnimation,
+			//		baseEntity->entity.bodyOrientation,
+			//		glm::radians(65.f));
+			//}
+
 		};
 
 		auto changeRandomWalkDirectionIfNeeded = [&]()
 		{
 			//random walk
 			stateWalkingRandomlyData.changeDirectionTime -= deltaTime;
+			stateWalkingRandomlyData.changeLookDirectionTime -= deltaTime;
+			bool relook = false;
 
 			if (stateWalkingRandomlyData.changeDirectionTime <= 0)
 			{
-				stateWalkingRandomlyData.changeDirectionTime = getRandomNumberFloat(rng, 1, 5);
-				stateWalkingRandomlyData.changeDirectionTime += getRandomNumberFloat(rng, 1, 5);
+				if (worriedTimer)
+				{
+					stateWalkingRandomlyData.changeDirectionTime = getRandomNumberFloat(rng, 1, 3);
+					stateWalkingRandomlyData.changeDirectionTime += getRandomNumberFloat(rng, 1, 3);
+				}
+				else
+				{
+					stateWalkingRandomlyData.changeDirectionTime = getRandomNumberFloat(rng, 1, 5);
+					stateWalkingRandomlyData.changeDirectionTime += getRandomNumberFloat(rng, 1, 5);
+				}
+
 
 				direction = getRandomUnitVector(rng);
-				baseEntity->entity.bodyOrientation = direction;
 
-				lookAtDirection(glm::vec3(direction.x, 0, direction.y), baseEntity->entity.lookDirectionAnimation,
-					currentPosition, baseEntity->entity.bodyOrientation,
-					glm::radians(65.f));
+				baseEntity->wantToLookDirection = glm::vec3(direction.x, 0, direction.y);
+				relook = true;
+
+			}
+
+			if (stateWalkingRandomlyData.changeLookDirectionTime <= 0 || relook)
+			{
+				if (worriedTimer)
+				{
+					stateWalkingRandomlyData.changeLookDirectionTime = getRandomNumberFloat(rng, 1, 3);
+					stateWalkingRandomlyData.changeLookDirectionTime += getRandomNumberFloat(rng, 1, 3);
+				}
+				else
+				{
+					stateWalkingRandomlyData.changeLookDirectionTime = getRandomNumberFloat(rng, 1, 4);
+					stateWalkingRandomlyData.changeLookDirectionTime += getRandomNumberFloat(rng, 1, 4);
+				}
+
+
+
+				glm::vec3 viewVector = glm::vec3(direction.x, 0, direction.y);
+
+				baseEntity->wantToLookDirection = moveVectorRandomlyBiasKeepCenter(viewVector,
+					rng, glm::radians(50.f), glm::radians(20.f));
+
+
 			}
 		};
 
@@ -226,6 +459,7 @@ struct BasicEnemyBehaviour
 
 		auto changeRandomState = [&](float stayingChance = 0.5)
 		{
+
 			stateChangeTimer = getRandomNumberFloat(rng, 1, 5)
 				+ getRandomNumberFloat(rng, 1, 5) + getRandomNumberFloat(rng, 1, 5);
 
@@ -234,6 +468,12 @@ struct BasicEnemyBehaviour
 				if (currentState != stateStaying)
 				{
 					changeStateStaying();
+
+					if (worriedTimer)
+					{
+						stateChangeTimer = getRandomNumberFloat(rng, 1, 2)
+							+ getRandomNumberFloat(rng, 1, 2);
+					}
 				}
 			}
 			else
@@ -290,7 +530,7 @@ struct BasicEnemyBehaviour
 		auto jumpIfNeeded = [&]()
 		{
 
-			if (direction.x != 0 && direction.y != 0)
+			if (direction.x != 0 || direction.y != 0)
 			{
 				auto blockPos = currentPosition;
 				blockPos.x += direction.x;
@@ -320,7 +560,7 @@ struct BasicEnemyBehaviour
 
 		auto applyMoveDirection = [&]()
 		{
-			if (direction.x != 0 && direction.y != 0)
+			if (direction.x != 0 || direction.y != 0)
 			{
 				auto move = 2.f * deltaTime * direction;
 
@@ -386,7 +626,7 @@ struct BasicEnemyBehaviour
 			//	direction = {0,0};
 			//}
 
-			if(!pathFindingSucceeded && closeToPlayer)
+			if (!pathFindingSucceeded && closeToPlayer)
 			{
 
 				auto path = pathFindingSurvival.find(playerLockedOn);
@@ -599,6 +839,74 @@ struct BasicEnemyBehaviour
 			};
 		};
 
+		auto tryHitPlayer = [&]()
+		{
+			//can hit
+			if (hitTimer <= 0 && playerLockedOn)
+			{
+
+
+				//check if the enemy is looking towards the player to attack
+
+				glm::vec3 vectorToPlayer = playerLockedOnPosition - currentPosition;
+
+				float length = glm::length(vectorToPlayer);
+
+				bool canAttack = false;
+
+				//if we are very close the enemy can attack anyway
+				if (length < 0.5)
+				{
+					canAttack = true;
+
+					if (length == 0)
+					{
+						vectorToPlayer = {0,0,1};
+					}
+					else
+					{
+						vectorToPlayer /= length;
+					}
+				}
+				else
+				{
+					vectorToPlayer /= length;
+					if (glm::dot(vectorToPlayer, realLookDirection) > 0.69)
+					{
+						canAttack = true;
+					}
+				}
+				
+				if (canAttack)
+				{
+					WeaponStats weaponStats = baseEntity->getWeaponStats();
+					if (weaponStats.range >= length)
+					{
+						//attack player
+
+						auto found = allClients.find(playerLockedOn);
+
+						if(found != allClients.end())
+						{
+							hitTimer = weaponStats.speed;
+							std::uint64_t wasKilled = 0;
+
+							std::cout << "Attack!" << length << " ";
+
+							doHittingThings(found->second->playerData, vectorToPlayer, currentPosition,
+								weaponStats, wasKilled, rng, found->first, 1, 0);
+
+
+						}
+
+
+					}
+				}
+
+
+			}
+		};
+
 		searchForPlayerLogicIfNeeded();
 		checkIfStillSeingPlayer();
 		lookAtTargetedPlayer();
@@ -608,17 +916,27 @@ struct BasicEnemyBehaviour
 			currentState = stateTargetedPlayer;
 		}
 
+		//if(0)
 		switch (currentState)
 		{
 
 			case stateStaying:
 			{
-				
+
 				stateStayingData.timerChangeLookDirection -= deltaTime;
 				if (stateStayingData.timerChangeLookDirection < 0)
 				{
-					stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 10)
-						+ getRandomNumberFloat(rng, 1, 10);
+
+					if (worriedTimer)
+					{
+						stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 4)
+							+ getRandomNumberFloat(rng, 1, 4);
+					}
+					else
+					{
+						stateStayingData.timerChangeLookDirection = getRandomNumberFloat(rng, 1, 10)
+							+ getRandomNumberFloat(rng, 1, 10);
+					}
 
 					lookAtARandomDirection();
 				}
@@ -629,7 +947,7 @@ struct BasicEnemyBehaviour
 				{
 					changeRandomState();
 				}
-
+				break;
 			}
 
 			case stateWalkingRandomly:
@@ -648,6 +966,7 @@ struct BasicEnemyBehaviour
 				{
 					changeRandomState();
 				}
+				break;
 			}
 			
 			case stateTargetedPlayer:
@@ -660,6 +979,13 @@ struct BasicEnemyBehaviour
 				jumpIfNeeded();
 
 				applyMoveDirection();
+
+				tryHitPlayer();
+
+				//will remain worried after just fighting
+				worriedTimer = std::max(worriedTimer, 60.f);
+
+				break;
 			}
 
 

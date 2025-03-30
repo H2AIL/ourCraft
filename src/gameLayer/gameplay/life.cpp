@@ -3,23 +3,47 @@
 
 //hit
 int calculateDamage(Armour armour_, const WeaponStats &weaponStats, std::minstd_rand &rng
-	, float hitCorectness, float critChanceBonus)
+	, float hitCorectness, float critChanceBonus, bool unaware)
 {
 	float totalDamage = 0;
 
 	float critChance = weaponStats.critChance;
 	critChance += critChanceBonus * 0.2f;
-	critChance = glm::clamp(critChance, 0.f, 0.9f);
+
+	if (weaponStats.accuracy < 0)
+	{
+		critChance += weaponStats.getAccuracyNormalizedNegative(); //we heavily decrease crit chance
+	}
+	else
+	{
+		critChance += weaponStats.getAccuracyNormalizedNegative() / 5.f;
+	}
+
+	if (weaponStats.accuracy < 0)
+	{
+		critChance = glm::clamp(critChance, 0.f, 0.8f);
+	}
+	else
+	{
+		critChance = glm::clamp(critChance, 0.f, 0.9f); //never 100% chance
+	}
+
 
 	bool crit = getRandomChance(rng, critChance);
 
-	if (crit)
+	if (unaware)
 	{
-		totalDamage += weaponStats.damage * weaponStats.critDamage;
+		totalDamage += weaponStats.surprizeDamage;
+		std::cout << "Surprize! ";
+	}else if (crit)
+	{
+		totalDamage += weaponStats.critDamage;
+		std::cout << "Crit! ";
 	}
 	else
 	{
 		totalDamage += weaponStats.damage;
+		std::cout << "Normal! ";
 	}
 	
 	float armour = armour_.armour;

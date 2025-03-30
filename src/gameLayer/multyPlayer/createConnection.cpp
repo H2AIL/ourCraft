@@ -14,6 +14,8 @@
 
 static ConnectionData clientData;
 
+void playSoundAndShakeForPlayerTakingDamage();
+
 //todo this will get removed, for some things at least
 void submitTaskClient(Task &t)
 {
@@ -179,6 +181,19 @@ void recieveDataClient(ENetEvent &event,
 							int xBegin = chunkPacket->chunk.x * CHUNK_SIZE;
 							int zBegin = chunkPacket->chunk.z * CHUNK_SIZE;
 
+							//todo mvoe this into the light system later!!!!
+							for (int x = 0; x < CHUNK_SIZE; x++)
+								for (int z = 0; z < CHUNK_SIZE; z++)
+									for (int y = 0; y < CHUNK_HEIGHT; y++)
+									{
+
+										auto &b = chunk->unsafeGet(x, y, z);
+
+										entityManager.addBlockEntity({chunk->data.x * CHUNK_SIZE + x, y,
+											chunk->data.z * CHUNK_SIZE + z}, b.getType());
+
+									}
+
 							if (!dontUpdateLightSystem)
 							{
 								chunk->setDontDrawYet(true);
@@ -201,6 +216,13 @@ void recieveDataClient(ENetEvent &event,
 
 												chunkSystem.shouldUpdateLights = true;
 											}
+
+											//if (b.getType() == BlockTypes::trainingDummy)
+											//{
+											//	entityManager.addEmptyEntityBasedOnBlockPosition<EntityType::trainingDummy>
+											//		(chunk->data.x *CHUNK_SIZE + x, y,
+											//		chunk->data.z *CHUNK_SIZE + z);
+											//}
 
 										}
 
@@ -392,7 +414,36 @@ void recieveDataClient(ENetEvent &event,
 			Packet_PlaceBlocks b = *(Packet_PlaceBlocks *)data;
 
 			chunkSystem.placeBlockByServerAndRemoveFromUndoQueue(b.blockPos, b.blockInfo, lightSystem,
-				playerInteraction, undoQueue);
+				playerInteraction, undoQueue, entityManager);
+
+			break;
+		}
+
+		case headerTrainingDummyGotAttacked:
+		{
+
+			if (size != sizeof(Packet_TrainingDummyGotAttacked)) { break; }
+
+			Packet_TrainingDummyGotAttacked p = *(Packet_TrainingDummyGotAttacked*)data;
+			p.normalize();
+
+			auto pos = fromEntityIDToBlockPos(p.entityID);
+			auto block = chunkSystem.getBlockSafe(pos);
+			
+			if (block && block->getType() == BlockTypes::trainingDummy)
+			{
+
+				//std::cout << "Round trip!!! ";
+
+				auto &entity = entityManager.trainingDummy[p.entityID];
+				
+				p.attackStrength -= computeRestantTimer(p.timer, serverTimer);
+				if (p.attackStrength < 0) { break; }
+
+				entity.attackStrengthAndTimer = std::max(entity.attackStrengthAndTimer, p.attackStrength);
+
+
+			}
 
 			break;
 		}
@@ -406,7 +457,7 @@ void recieveDataClient(ENetEvent &event,
 				Packet_PlaceBlocks b = ((Packet_PlaceBlocks *)data)[i];
 
 				chunkSystem.placeBlockByServerAndRemoveFromUndoQueue(b.blockPos, b.blockInfo, lightSystem,
-					playerInteraction, undoQueue);
+					playerInteraction, undoQueue, entityManager);
 
 			}
 			//std::cout << "Placed blocks..." << size / sizeof(Packet_PlaceBlocks) << "\n";
@@ -712,7 +763,7 @@ void recieveDataClient(ENetEvent &event,
 
 			entityManager.localPlayer.life.sanitize();
 
-			AudioEngine::playHurtSound();
+			playSoundAndShakeForPlayerTakingDamage();
 		}
 		break;
 

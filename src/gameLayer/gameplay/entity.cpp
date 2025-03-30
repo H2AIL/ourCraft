@@ -3,7 +3,6 @@
 #include <iostream>
 
 #define GLM_ENABLE_EXPERIMENTAL
-#include <glm/glm.hpp>
 #include <glm/gtx/vector_angle.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <multyPlayer/serverChunkStorer.h>
@@ -99,6 +98,32 @@ float shortestAngleDirection(float angleFrom, float angleTo)
 	return diff;
 }
 
+std::uint64_t fromBlockPosToEntityID(int x, unsigned char y, int z, unsigned char entityType)
+{
+	return (static_cast<std::uint64_t>(entityType) << 56) |  // 8 bits
+		((static_cast<std::uint64_t>(x) & MASK_24) << 32) | // 24 bits (signed)
+		(static_cast<std::uint64_t>(y) << 24) |  // 8 bits
+		(static_cast<std::uint64_t>(z) & MASK_24); // 24 bits (signed)
+}
+
+glm::ivec3 fromEntityIDToBlockPos(std::uint64_t entityId, unsigned char *outEntityType)
+{
+	if (outEntityType)
+	{
+		*outEntityType = static_cast<unsigned char>(entityId >> 56);
+	}
+
+	int x = static_cast<int>((entityId >> 32) & MASK_24);
+	int y = static_cast<int>((entityId >> 24) & MASK_8);
+	int z = static_cast<int>(entityId & MASK_24);
+
+	// Sign extend 24-bit x and z to 32-bit
+	if (x & (1 << 23)) x |= 0xFF000000; // Extend negative sign
+	if (z & (1 << 23)) z |= 0xFF000000; // Extend negative sign
+
+	return glm::ivec3(x, y, z);
+}
+
 int getRandomNumber(std::minstd_rand &rng, int min, int max)
 {
 	return rng() % (max + 1 - min) + min;
@@ -107,6 +132,25 @@ int getRandomNumber(std::minstd_rand &rng, int min, int max)
 float getRandomNumberFloat(std::minstd_rand &rng, float min, float max)
 {
 	return (getRandomNumber(rng, 0, 1000) / 1000.f) * (max-min) + min;
+}
+
+inline uint32_t hash(int x, int y, int z)
+{
+	uint32_t h = static_cast<uint32_t>(x) * 374761393 +
+		static_cast<uint32_t>(y) * 668265263 +
+		static_cast<uint32_t>(z) * 2147483647;
+	h ^= (h >> 13);
+	h *= 1274126177;
+	h ^= (h >> 16);
+	return h;
+}
+
+float getRandomNumberFloat(int x, int y, int z, float a, float b)
+{
+	std::minstd_rand rng;
+	rng.seed(hash(x, y, z));
+
+	return getRandomNumberFloat(rng, a, b);
 }
 
 void RubberBand::computeRubberBand(float deltaTime)
@@ -188,10 +232,77 @@ glm::vec3 computeLookDirection(glm::vec2 bodyOrientation, glm::vec3 lookDirectio
 	return lookDirection;
 }
 
+
+[[nodiscard]]
+glm::vec3 orientVectorTowards(glm::vec3 vector, glm::vec3 target, float speed)
+{
+	vector = glm::normalize(vector);
+	target = glm::normalize(target);
+
+	// Compute the quaternion that rotates from vector to target
+	glm::quat rotation = glm::rotation(vector, target);
+
+	// Get the angle of rotation
+	float angle = 2.0f * glm::acos(glm::clamp(rotation.w, -1.0f, 1.0f));
+
+	// Prevent overshooting
+	if (angle < speed)
+		return target;
+
+	// Perform slerp with a fraction of the full rotation (scaled by speed)
+	glm::quat interpolatedRotation = glm::slerp(glm::quat(1, 0, 0, 0), rotation, speed / angle);
+
+	// Apply the quaternion rotation to the vector
+	return glm::normalize(interpolatedRotation * vector);
+}
+
+[[nodiscard]]
+glm::vec3 moveVectorRandomly(glm::vec3 vector, std::minstd_rand &rng, float radiansX, float radiansY)
+{
+	vector = glm::normalize(vector);
+
+	float randYaw = getRandomNumberFloat(rng, -radiansX, radiansX);
+	float randPitch = getRandomNumberFloat(rng, -radiansY, radiansY);
+
+	glm::mat3 yawRotation = glm::mat3(glm::rotate(glm::mat4(1.0f), randYaw, glm::vec3(0, 1, 0)));
+	glm::vec3 newVector = yawRotation * vector;
+
+	glm::vec3 right = glm::normalize(glm::cross(newVector, glm::vec3(0, 1, 0)));
+	glm::mat3 pitchRotation = glm::mat3(glm::rotate(glm::mat4(1.0f), randPitch, right));
+	newVector = pitchRotation * newVector;
+
+	return glm::normalize(newVector);
+}
+
+[[nodiscard]]
+glm::vec3 moveVectorRandomlyBiasKeepCenter(glm::vec3 vector, std::minstd_rand &rng, float radiansX, float radiansY)
+{
+	vector = glm::normalize(vector);
+
+	float randYaw = getRandomNumberFloat(rng, -radiansX, radiansX);
+	float randYaw2 = getRandomNumberFloat(rng, -radiansX, radiansX);
+	float randPitch = getRandomNumberFloat(rng, -radiansY, radiansY);
+	float randPitch2 = getRandomNumberFloat(rng, -radiansY, radiansY);
+
+	if (std::abs(randYaw2) < std::abs(randYaw)) { randYaw = randYaw2; }
+	if (std::abs(randPitch2) < std::abs(randPitch)) { randPitch = randPitch2; }
+
+
+	glm::mat3 yawRotation = glm::mat3(glm::rotate(glm::mat4(1.0f), randYaw, glm::vec3(0, 1, 0)));
+	glm::vec3 newVector = yawRotation * vector;
+
+	glm::vec3 right = glm::normalize(glm::cross(newVector, glm::vec3(0, 1, 0)));
+	glm::mat3 pitchRotation = glm::mat3(glm::rotate(glm::mat4(1.0f), randPitch, right));
+	newVector = pitchRotation * newVector;
+
+	return glm::normalize(newVector);
+}
+
+
 bool getRandomChance(std::minstd_rand &rng, float chance)
 {
 	float dice = getRandomNumberFloat(rng, 0.0, 1.0);
-	return dice < chance;
+	return dice <= chance;
 }
 
 void doCollisionWithOthers(glm::dvec3 &positiom, glm::vec3 colider, MotionState &forces,
@@ -306,6 +417,98 @@ void PhysicalEntity::move(glm::vec2 move)
 {
 	position.x += move.x;
 	position.z += move.y;
+}
+
+void PhysicalEntity::moveDynamic(glm::vec2 move, float deltaTime)
+{
+
+	position.x += move.x * deltaTime;
+	position.z += move.y * deltaTime;
+	return;
+
+	glm::vec2 originalMove = move;
+	
+	float velocity = glm::length(move);
+	
+	if (velocity > 0.0000001)
+	{
+		move /= velocity;
+		move *= (velocity + BLOCK_DEFAULT_FRICTION * 2) * deltaTime;
+	
+		if (move.x > 0)
+		{
+			if (forces.velocity.x < originalMove.x)
+				{ forces.velocity.x += move.x; }
+		}
+		else
+		{
+			if (forces.velocity.x > originalMove.x)
+				{ forces.velocity.x += move.x; }
+		}
+
+		if (move.y > 0)
+		{
+			if (forces.velocity.z < originalMove.y)
+			{
+				forces.velocity.z += move.y;
+			}
+		}
+		else
+		{
+			if (forces.velocity.z > originalMove.y)
+			{
+				forces.velocity.z += move.y;
+			}
+		}
+
+		//forces.velocity.x += move.x;
+		//forces.velocity.z += move.y;
+		
+	
+	}
+	else
+	{
+		//bring the entity to a stop slowly
+		//forces.velocity.x += move.x;
+		//forces.velocity.z += move.y;
+	
+	}
+
+	//float targetSpeed = glm::length(move);
+	//if (targetSpeed > 0.00001f)
+	//{
+	//	glm::vec2 targetVelocity = glm::normalize(move) * (targetSpeed);
+	//
+	//	forces.velocity.x = targetVelocity.x;
+	//	forces.velocity.z = targetVelocity.y;
+	//
+	//}
+
+
+	//float targetSpeed = glm::length(move);
+	//if (targetSpeed > 0.00001f)
+	//{
+	//	glm::vec2 targetVelocity = glm::normalize(move) * (targetSpeed);
+	//
+	//	const float ACCELERATION_RATE = 10.0f; // Adjust to control snappiness
+	//
+	//	// Smoothly interpolate velocity toward target velocity
+	//	forces.velocity.x = glm::mix(forces.velocity.x, targetVelocity.x, 1.0f - glm::exp(-ACCELERATION_RATE * deltaTime));
+	//	forces.velocity.z = glm::mix(forces.velocity.z, targetVelocity.y, 1.0f - glm::exp(-ACCELERATION_RATE * deltaTime));
+	//
+	//	//if (forces.velocity.x > targetVelocity.x) {} else if(forces.velocity.x += targetVelocity.x * deltaTime);
+	//
+	//	//if (force.x > 0) { force.x -= drag.x; if(force.x < 0) {force.x = 0;} } else
+	//}
+	//else
+	//{
+	//
+	//}
+
+
+
+
+
 }
 
 void adjustVectorTowardsDirection(glm::vec3 &vector, glm::vec3 desiredDirection, float threshold)

@@ -4,7 +4,6 @@
 #include <platformTools.h>
 #include <string>
 
-constexpr static float BLOCK_DEFAULT_FRICTION = 8.f;
 
 int blockReorder[] = {
 	// Basic Blocks
@@ -27,7 +26,7 @@ int blockReorder[] = {
 
 	// Leaves & Plants
 	leaves, jungle_leaves, birch_leaves, palm_leaves, spruce_leaves, spruce_leaves_red,
-	grass, rose, dead_bush, cactus_bud, vines, yellowGrass,
+	grass, rose, dead_bush, cactus_bud, vines, yellowGrass, hayBalde,
 
 	// Decorative & Special Blocks
 	bricks, bricks_stairs, bricks_slabs, bricks_wall, blueBricks, blueBricks_stairs, blueBricks_slabs, blueBricks_wall,
@@ -50,7 +49,7 @@ int blockReorder[] = {
 	 magenta_stained_glass, pink_stained_glass,
 
 	// Structures & Functional Blocks
-	craftingTable, workBench, cookingPot, ladder,
+	craftingTable, workBench, cookingPot, ladder, trainingDummy, target,
 
 	// Furniture
 	bookShelf,
@@ -274,6 +273,8 @@ bool isDecorativeFurniture(BlockType type)
 		type == lamp ||
 		type == torch ||
 		type == torchWood ||
+		type == trainingDummy ||
+		type == target ||
 		type == globe
 		
 		;
@@ -331,6 +332,9 @@ bool isColidable(BlockType type)
 		type != BlockTypes::vines &&
 		type != BlockTypes::smallRock &&
 		type != BlockTypes::cobweb &&
+		type != BlockTypes::trainingDummy &&
+		type != BlockTypes::craftingItems &&
+		type != BlockTypes::target &&
 		type != BlockTypes::mug;
 }
 
@@ -656,6 +660,7 @@ bool Block::normalize()
 
 	auto type = getType();
 
+	//remove wierd blocks!
 	if (type >= BlockTypes::BlocksCount)
 	{
 		typeAndFlags = {};
@@ -771,6 +776,12 @@ float getBlockBaseMineDuration(BlockType type)
 	{
 		return 0.2;
 	}
+
+	if (type == hayBalde)
+	{
+		return 0.3;
+	}
+
 
 	std::cout << "Block without base mine duration assigned!: " << type << "\n";
 	permaAssertComment(0, ("Block without base mine duration assigned!: " + std::to_string(type)).c_str());

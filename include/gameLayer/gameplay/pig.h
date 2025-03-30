@@ -2,6 +2,8 @@
 #include <gameplay/entity.h>
 #include <random>
 #include <gameplay/ai.h>
+#include <unordered_map>
+#include <unordered_set>
 
 
 
@@ -40,7 +42,8 @@ struct PigServer: public ServerEntity<Pig>,
 		ServerChunkStorer &serverChunkStorer, std::minstd_rand &rng, std::uint64_t yourEID,
 		std::unordered_set<std::uint64_t> &othersDeleted,
 		std::unordered_map<std::uint64_t, std::unordered_map<glm::ivec3, PathFindingNode>> &pathFinding,
-		std::unordered_map<std::uint64_t, glm::dvec3> &playersPosition
+		std::unordered_map<std::uint64_t, glm::dvec3> &playersPosition,
+		std::unordered_map < std::uint64_t, Client *> &allClients
 		);
 
 	void appendDataToDisk(std::ofstream &f, std::uint64_t eId);
@@ -48,6 +51,9 @@ struct PigServer: public ServerEntity<Pig>,
 	//todo change to init
 	void configureSpawnSettings(std::minstd_rand &rng);
 
+	//todo
+	bool isUnaware() { return  false; }
+	void signalHit(glm::vec3 direction) {};
 };
 
 
